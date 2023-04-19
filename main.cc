@@ -31,6 +31,7 @@ diskptr_t generate_diskptr()
 
 
 #define MAX_KEYS (1000000)
+#define MAX_CHECK_KEY (10)
 
 int main(int argc, char *argv[])
 {
@@ -61,17 +62,18 @@ int main(int argc, char *argv[])
     assert(error == 0);
     assert(memcmp(&check, &value, sizeof(diskptr_t)) == 0);
 
-    int onlyten = 0;
+    int checkkey = 0;
     for (auto t : keys) {
       error = btree_find(&tree, t.first, &check);
       assert(error == 0);
       assert(memcmp(&check, &t.second, sizeof(diskptr_t)) == 0);
-      if (onlyten == 10) {
+      if (checkkey == MAX_CHECK_KEY) {
         break;
       }
-      onlyten += 1;
+      checkkey += 1;
     }
   }
+
   for (auto t : keys) {
     error = btree_find(&tree, t.first, &check);
     assert(error == 0);
@@ -88,16 +90,19 @@ int main(int argc, char *argv[])
     assert(error != 0);
     keys.erase(it); 
 
-    int onlyten = 0;
+    int checkkey = 0;
     for (auto t : keys) {
       error = btree_find(&tree, t.first, &check);
       assert(error == 0);
       assert(memcmp(&check, &t.second, sizeof(diskptr_t)) == 0);
-      if (onlyten == 10) {
+      if (checkkey == MAX_CHECK_KEY) {
         break;
       }
-      onlyten += 1;
+      checkkey += 1;
     }
   }
+
+  print_buf_stats();
+
   return 0;
 }

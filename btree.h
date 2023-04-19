@@ -1,3 +1,18 @@
+/*
+ *
+ * COW version, and write optimized 
+ * B+Tree which is designed to follow the FreeBSD kernel buffer
+ * cache semantics
+ *
+ * The general design is such that it uses the underlying buffer cache to keep
+ * track of nodes (meaning no volatile in memory pointers to other children).
+ * Each operation keeps a path of nodes access, locking respectively as
+ * it traverses the tree.
+ *
+ * Having the buffer cache keep track of memory makes the implementation
+ * cleaner and easier
+ */
+
 #include <sys/types.h>
 
 #include "buf.h"
@@ -12,8 +27,10 @@
 #define BT_INNER (1)
 
 /* The number of keys is 
- * (BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) / (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
+ * (BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) / 
+ *  (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
  */
+
 #define BT_MAX_KEYS (1636)
 #define SPLIT_KEYS (818)
 
@@ -21,6 +38,7 @@
 #define BT_ISINNER(node) ((node)->n_type == BT_INNER)
 #define BT_VALSZ(node) ((node)->n_tree->tr_vs)
 
+/* Header object that is apart of every on disk node */
 typedef struct btnodehdr {
   uint32_t hdr_len;
   uint8_t  hdr_type;
@@ -29,11 +47,12 @@ typedef struct btnodehdr {
 
 typedef btnodehdr *btnodehdr_t;
 
-/* 64 Bytes Structure */
+/* Container for holding the values for Btree */
 typedef struct child_cont {
   unsigned char  vdata[BT_MAX_VALUE_SIZE];
 } ct;
 
+/* Data representing the on disk btree node */
 typedef struct btdata {
   btnodehdr bt_hdr;
   uint64_t  bt_keys[BT_MAX_KEYS];
@@ -47,6 +66,7 @@ typedef btdata *btdata_t;
 struct btree;
 typedef btree *btree_t;
 
+/* In memory btnode */
 typedef struct btnode {
   struct buf  *n_bp;
   btdata_t    n_data;

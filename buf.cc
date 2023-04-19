@@ -1,29 +1,169 @@
 #include "buf.h"
 
+#include "pthread.h"
+
 #include <unordered_map>
+#include <list>
+#include <set>
+#include <cassert>
+#include <chrono>
+#include <thread>
 
 std::mutex buffer_cache_lk;
 std::unordered_map<uint64_t,struct buf *> buffer_cache;
 
+std::mutex dirty_lk;
+std::set<struct buf *> dirty_set;
+
 std::atomic<uint64_t> pblkno;
 
+#define LRU_CAPACITY (1000)
+#define NS (1e9)
+#define KB (1UL * 1024)
+#define MB (1UL * 1024 * KB)
+#define GB (1UL * 1024 * MB)
+#define THROUGHPUT (2UL * GB)
+
+void sleep_ns(unsigned long ns) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
+    while (std::chrono::duration_cast<std::chrono::nanoseconds>
+        (std::chrono::high_resolution_clock::now() - start_time).count() < ns) {
+    }
+}
+
+/*
+ * LRUCache
+ * 
+ * This cache serves to induce disk latency when required for buffers
+ * that are not longer in its hot set. To reduce this time, increase
+ * throughput of the simulated SSD (THROUHPUT)
+ */
+class LRUCache {
+public:
+    LRUCache() : m_capacity(LRU_CAPACITY) {}
+    int access(int key) {
+        auto it = m_cache.find(key);
+        if (it != m_cache.end()) {
+            m_list.splice(m_list.begin(), m_list, it->second);
+            hits.fetch_add(1);
+            return 0;
+        }
+
+        if (m_cache.size() == m_capacity) {
+            int key_to_remove = m_list.back();
+            m_list.pop_back();
+            m_cache.erase(key_to_remove);
+        }
+
+        m_list.emplace_front(key);
+        m_cache[key] = m_list.begin();
+        misses.fetch_add(1);
+        return 1;
+    }
+
+std::atomic<uint64_t> hits;
+std::atomic<uint64_t> misses;
+
+private:
+    int m_capacity;
+    std::list<uint64_t> m_list;
+    std::unordered_map<int, std::list<uint64_t>::iterator> m_cache;
+};
+
+static LRUCache lru;
+
+void
+print_buf_stats()
+{
+  auto h = lru.hits.load();
+  auto m = lru.misses.load();
+  printf("LRU Stats\n");
+  printf("=========\n");
+  printf("Hits: %lu\n", h);
+  printf("Misses: %lu\n", m);
+  auto percentage = (int)(((double)h / (double)(h +m)) * 100);
+  printf("Percentage: %d\n", percentage);
+}
+
+
+static struct buf *
+create_buf(uint64_t lblkno, size_t size)
+{
+  struct buf *bp = (struct buf *)malloc(sizeof(struct buf));
+  bp->bp_data = malloc(size);
+  bzero(bp->bp_data, size);
+  bp->bp_data = malloc(size);
+  bp->bp_lblkno = lblkno;
+
+  return bp;
+}
+
 struct buf *
-getblk(uint64_t lblkno, size_t size)
+getblk(uint64_t lblkno, size_t size, int lk_flags)
 {
   std::lock_guard<std::mutex> guard(buffer_cache_lk);
+  /* Check if we miss on the cache */
+#ifndef NO_DISK_LATENCY
+  if (lru.access(lblkno)) {
+    double sleeptime = ((double)size) / THROUGHPUT;
+    sleeptime = sleeptime * NS;
+    sleep_ns(sleeptime);
+  }
+#endif
+
   auto iter = buffer_cache.find(lblkno);
   if (iter == buffer_cache.end()) {
-    struct buf *bp = (struct buf *)malloc(sizeof(struct buf));
-    bp->bp_data = malloc(size);
-    bzero(bp->bp_data, size);
-    bp->bp_data = malloc(size);
-    bp->bp_lblkno = lblkno;
-
+    struct buf *bp = create_buf(lblkno, size);
     buffer_cache.insert({lblkno, bp});
+    buf_lock(bp, lk_flags);
     return bp;
   }
 
+  buf_lock(iter->second, lk_flags);
   return iter->second;
+}
+
+void 
+buf_lock(struct buf *bp, int flags)
+{
+  if (flags == LK_EXCLUSIVE) {
+    bp->bp_lk.lock();
+    return;
+  }
+
+  if (flags == LK_SHARED) {
+    bp->bp_lk.lock_shared();
+    return;
+  }
+}
+
+void 
+buf_unlock(struct buf *bp, int flags)
+{
+  if (flags == LK_EXCLUSIVE) {
+    bp->bp_lk.unlock();
+  }
+  
+  if (flags == LK_SHARED) {
+    bp->bp_lk.unlock_shared();
+  }
+}
+
+void
+bdirty(struct buf * bp)
+{
+  std::lock_guard<std::mutex> guard(dirty_lk);
+  dirty_set.insert(bp);
+}
+
+void
+bwrite(struct buf *bp)
+{
+  std::lock_guard<std::mutex> guard(dirty_lk);
+  auto it = dirty_set.find(bp);
+  if (it != dirty_set.end())
+    dirty_set.erase(it);
 }
 
 
