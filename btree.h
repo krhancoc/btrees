@@ -71,11 +71,16 @@ typedef struct btree {
 
 int btree_init(btree_t tree, diskptr_t ptr, size_t value_size);
 int btree_insert(btree_t tree, uint64_t key, void *value);
+int btree_bulkinsert(btree_t tree, uint64_t *keys, void **values, size_t len);
+
 int btree_delete(btree_t tree, uint64_t key, void *value);
 
+int btree_find(btree_t tree, uint64_t key, void *value);
 int btree_greater_equal(btree_t tree, uint64_t key, void *value);
 int btree_smaller_equal(btree_t tree, uint64_t key, void *value);
-int btree_find(btree_t tree, uint64_t key, void *value);
+
 int btree_rangequery(btree_t tree, uint64_t key_low, 
     uint64_t key_max, void *results, size_t results_max);
+
+ diskptr_t btree_checkpoint(btree_t tree);
 

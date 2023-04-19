@@ -30,7 +30,7 @@ diskptr_t generate_diskptr()
 }
 
 
-#define MAX_KEYS (10000000)
+#define MAX_KEYS (1000000)
 
 int main(int argc, char *argv[])
 {
@@ -46,6 +46,7 @@ int main(int argc, char *argv[])
     printf("Problem initing\n");
   }
 
+  printf("Filling keys...\n");
   for (uint64_t i = 0; i < MAX_KEYS; i++) {
     uint64_t key = generate_unique_key();
     while (keys.find(key) != keys.end()) {
@@ -71,6 +72,32 @@ int main(int argc, char *argv[])
       onlyten += 1;
     }
   }
+  for (auto t : keys) {
+    error = btree_find(&tree, t.first, &check);
+    assert(error == 0);
+    assert(memcmp(&check, &t.second, sizeof(diskptr_t)) == 0);
+  }
 
+  printf("Deleting keys...\n");
+  while (!keys.empty()) {
+    auto it = keys.begin();
+    btree_delete(&tree, it->first, &check);
+    assert(memcmp(&check, &it->second, sizeof(diskptr_t)) == 0);
+    bzero(&check, sizeof(diskptr_t));
+    error = btree_find(&tree, it->first, &check);
+    assert(error != 0);
+    keys.erase(it); 
+
+    int onlyten = 0;
+    for (auto t : keys) {
+      error = btree_find(&tree, t.first, &check);
+      assert(error == 0);
+      assert(memcmp(&check, &t.second, sizeof(diskptr_t)) == 0);
+      if (onlyten == 10) {
+        break;
+      }
+      onlyten += 1;
+    }
+  }
   return 0;
 }

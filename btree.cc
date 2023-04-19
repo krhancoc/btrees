@@ -44,9 +44,9 @@ btnode_print(btnode_t node) {
   }
   if (BT_ISINNER(node)) {
     printf("\n====CHILDREN=====\n");
-    for (int i = 0; i < node->n_len + 1; i+=10) {
+    for (int i = 0; i < (node->n_len + 1); i+=10) {
       printf("%d: ", i);
-      for (int j = i; j < i + 10 && j < node->n_len; j++) {
+      for (int j = i; j < i + 10 && (j < (node->n_len + 1)); j++) {
         printf(" %lx |", ((diskptr_t *)(&node->n_ch[j]))->offset);
       }
       printf("\n");
@@ -129,7 +129,6 @@ btnode_go_deeper(bpath_t path, uint64_t key)
     }
   }
 
-  //printf("[Deeper] %d %d %lx\n", cur->n_len, cidx, key);
   diskptr_t ptr = *(diskptr_t *)&cur->n_ch[cidx];
   path_add(path, cur->n_tree, ptr);
 
@@ -172,8 +171,6 @@ btnode_find_ge(btree_t tree, uint64_t *key, void *value)
   idx = binary_search(node->n_keys, node->n_len, *key);
   /* Is there no key here */
   if (idx >= node->n_len) {
-    printf("TRYING TO FIND %lx\n", *key);
-    path_print(&path);
     return -1;
   }
 
@@ -184,7 +181,7 @@ btnode_find_ge(btree_t tree, uint64_t *key, void *value)
 }
 
 static inline btnode_t
-btnode_parent(bpath_t path)
+path_parent(bpath_t path)
 {
   if (path->p_len <= 1) {
     return NULL;
@@ -223,16 +220,14 @@ btnode_split(bpath_t path)
 {
   int idx;
   btnode_t node = path_getcur(path);
-  btnode_t pptr = btnode_parent(path);
+  btnode_t pptr = path_parent(path);
   btnode parent;
   btnode right_child;
-  printf("[Split] %lx\n", node->n_ptr.offset);
-
   /* We are the root */
   if (pptr == NULL) {
     btnode_create(&parent, node->n_tree, BT_INNER);
     /* Set our current node to the child of our new parent */
-    memcpy(&node->n_ch[0], &node->n_ptr, sizeof(diskptr_t));
+    memcpy(&parent.n_ch[0], &node->n_ptr, sizeof(diskptr_t));
 
     path_fixup_parent(path, &parent);
     node = path_getcur(path);
@@ -253,7 +248,7 @@ btnode_split(bpath_t path)
   if (BT_ISLEAF(node)) {
     node->n_len = SPLIT_KEYS;
   } else {
-    btnode_print(node);
+//    btnode_print(node);
     node->n_len = SPLIT_KEYS - 1;
   }
 
@@ -263,22 +258,25 @@ btnode_split(bpath_t path)
   if (BT_ISLEAF(node))
     memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
   else
-    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS - 1], (SPLIT_KEYS + 2) * BT_MAX_VALUE_SIZE);
+    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
 
-  if (BT_ISINNER(node)) {
-    printf("LEFT\n");
-    btnode_print(node);
-    printf("RIGHT\n");
-    btnode_print(&right_child);
-    printf("PARENT\n");
-    btnode_print(&parent);
-  }
+  /* if (BT_ISINNER(node)) { */
+  /*   printf("LEFT\n"); */
+  /*   btnode_print(node); */
+  /*   printf("RIGHT\n"); */
+  /*   btnode_print(&right_child); */
+  /* } */
 
 
   /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the right must be
    * strictly greater
    */
   btnode_inner_insert(&parent, idx, split_key, right_child.n_ptr);
+  /* if (BT_ISINNER(node)) { */
+  /*   printf("PARENT\n"); */
+  /*   btnode_print(&parent); */
+  /* } */
+
   if (parent.n_len == BT_MAX_KEYS) {
     path->p_len -= 1;
     btnode_split(path);
@@ -290,7 +288,6 @@ static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
 {
   assert(BT_ISLEAF(node));
-  printf("[Insert] %lx into %lx at %d\n", key, node->n_ptr.offset, idx);
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
       memmove(&node->n_keys[idx+1], &node->n_keys[idx], num_to_move * sizeof(key));
@@ -320,6 +317,101 @@ btnode_insert(bpath_t path, uint64_t key, void *value)
   }
 
   return 0;
+}
+static void
+btnode_leaf_delete(btnode_t node, int idx, void *value)
+{
+  assert(BT_ISLEAF(node));
+  int num_to_move = node->n_len - idx;
+
+  if (value != NULL)
+    memcpy(value, &node->n_ch[idx + 1], BT_VALSZ(node));
+
+  /* printf("BEFORE DELETE AT %d\n", idx); */
+  /* btnode_print(node); */
+  if (num_to_move > 0) {
+      memmove(&node->n_keys[idx], &node->n_keys[idx + 1], num_to_move * sizeof(uint64_t));
+  }
+
+  if (num_to_move > 0) {
+      memmove(&node->n_ch[idx + 1], &node->n_ch[idx + 2], num_to_move * BT_MAX_VALUE_SIZE);
+  }
+  node->n_len -= 1;
+  /* printf("AFTER\n"); */
+  /* btnode_print(node); */
+}
+
+static void
+btnode_inner_collapse(bpath_t path)
+{
+  diskptr_t *ptr;
+
+  btnode_t node = path_getcur(path);
+  btnode_t parent = path_parent(path);
+
+  /* We are the root, and if we've gotten to this point that means
+   * We collapsed the last child into the parent so the parent need
+   * to become a leaf again */
+  if (parent == NULL) {
+    /* Ensure we are a leaf now */
+    node->n_type = BT_LEAF;
+    return;
+  }
+
+  if (node->n_len == 0) {
+    return;
+  }
+
+  /* Find our index */
+  int idx;
+  for (idx = 0; idx < parent->n_len + 1; idx++) {
+    ptr = (diskptr_t *)&parent->n_ch[idx];
+    if (memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0)
+      break;
+  }
+
+  assert(memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0);
+  int num_to_move = parent->n_len - idx;
+  memmove(&parent->n_keys[idx], &parent->n_keys[idx + 1], (num_to_move) * sizeof(uint64_t));
+  memmove(&parent->n_ch[idx], &parent->n_ch[idx + 1], num_to_move * BT_MAX_VALUE_SIZE);
+
+  parent->n_len -= 1;
+  if (parent->n_len == 0) {
+    path->p_len -= 1;
+    btnode_inner_collapse(path);
+  }
+}
+
+static int
+btnode_delete(bpath_t path, uint64_t key, void *value)
+{
+  btnode_t node;
+  int idx;
+
+  node = btnode_find_child(path, key);
+  idx = binary_search(node->n_keys, node->n_len, key);
+  if (node->n_keys[idx] != key) {
+    return -1;
+  }
+
+  btnode_leaf_delete(node, idx, value);
+    /* Grab the key so we can search for ourselves after words */
+
+  /* Delete the node from the parent */
+  if (node->n_len == 0) {
+    btnode_inner_collapse(path);
+  }
+
+  return 0;
+}
+
+int btree_delete(btree_t tree, uint64_t key, void *value)
+{
+  bpath path;
+  path.p_len = 0;
+  path_add(&path, tree, tree->tr_ptr);
+  return btnode_delete(&path, key, value);
+
 }
 
 int
@@ -352,19 +444,10 @@ btree_find(btree_t tree, uint64_t key, void *value)
 
   error = btnode_find_ge(tree, &possible_key, value);
   if (error) {
-    printf("Could not any key\n");
     return (error);
   }
 
   if (possible_key != key) {
-    bpath path;
-    path.p_len = 0;
-
-    path_add(&path, tree, tree->tr_ptr);
-
-    btnode_find_child(&path, key);
-    path_print(&path);
-    printf("Could not find exact key %lu\n", possible_key);
     return (-1);
   }
 
