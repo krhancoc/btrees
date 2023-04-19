@@ -44,11 +44,12 @@ btnode_print(btnode_t node) {
   }
   if (BT_ISINNER(node)) {
     printf("\n====CHILDREN=====\n");
-    for (int i = 0; i < node->n_len + 1; i++) {
-      printf("| %lx |", ((diskptr_t *)(&node->n_ch[i]))->offset);
-      if (i % 10 == 0) {
-        printf("\n");
+    for (int i = 0; i < node->n_len + 1; i+=10) {
+      printf("%d: ", i);
+      for (int j = i; j < i + 10 && j < node->n_len; j++) {
+        printf(" %lx |", ((diskptr_t *)(&node->n_ch[j]))->offset);
       }
+      printf("\n");
     }
   }
   printf("\n==================\n");
@@ -128,7 +129,7 @@ btnode_go_deeper(bpath_t path, uint64_t key)
     }
   }
 
-  printf("[Deeper] %d %d %lx\n", cur->n_len, cidx, key);
+  //printf("[Deeper] %d %d %lx\n", cur->n_len, cidx, key);
   diskptr_t ptr = *(diskptr_t *)&cur->n_ch[cidx];
   path_add(path, cur->n_tree, ptr);
 
@@ -225,6 +226,7 @@ btnode_split(bpath_t path)
   btnode_t pptr = btnode_parent(path);
   btnode parent;
   btnode right_child;
+  printf("[Split] %lx\n", node->n_ptr.offset);
 
   /* We are the root */
   if (pptr == NULL) {
@@ -251,17 +253,32 @@ btnode_split(bpath_t path)
   if (BT_ISLEAF(node)) {
     node->n_len = SPLIT_KEYS;
   } else {
+    btnode_print(node);
     node->n_len = SPLIT_KEYS - 1;
   }
 
+  uint64_t split_key = node->n_keys[SPLIT_KEYS - 1];
+
   memcpy(&right_child.n_keys[0], &node->n_keys[SPLIT_KEYS], SPLIT_KEYS * sizeof(uint64_t));
-  memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
+  if (BT_ISLEAF(node))
+    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
+  else
+    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS - 1], (SPLIT_KEYS + 2) * BT_MAX_VALUE_SIZE);
+
+  if (BT_ISINNER(node)) {
+    printf("LEFT\n");
+    btnode_print(node);
+    printf("RIGHT\n");
+    btnode_print(&right_child);
+    printf("PARENT\n");
+    btnode_print(&parent);
+  }
 
 
   /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the right must be
    * strictly greater
    */
-  btnode_inner_insert(&parent, idx, node->n_keys[SPLIT_KEYS - 1], right_child.n_ptr);
+  btnode_inner_insert(&parent, idx, split_key, right_child.n_ptr);
   if (parent.n_len == BT_MAX_KEYS) {
     path->p_len -= 1;
     btnode_split(path);

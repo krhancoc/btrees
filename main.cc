@@ -36,6 +36,7 @@ int main(int argc, char *argv[])
 {
   std::unordered_map<uint64_t, diskptr_t> keys;
   diskptr_t value;
+  diskptr_t check;
   btree tree;
   int error;
   diskptr_t ptr = allocate_blk(BLKSZ);
@@ -51,11 +52,24 @@ int main(int argc, char *argv[])
       key = generate_unique_key();
     }
     diskptr_t value = generate_diskptr();
+
+    keys.insert({key, value});
+
     btree_insert(&tree, key, &value);
-    diskptr_t check;
     error = btree_find(&tree, key, &check);
     assert(error == 0);
     assert(memcmp(&check, &value, sizeof(diskptr_t)) == 0);
+
+    int onlyten = 0;
+    for (auto t : keys) {
+      error = btree_find(&tree, t.first, &check);
+      assert(error == 0);
+      assert(memcmp(&check, &t.second, sizeof(diskptr_t)) == 0);
+      if (onlyten == 10) {
+        break;
+      }
+      onlyten += 1;
+    }
   }
 
   return 0;
