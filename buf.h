@@ -39,10 +39,17 @@ struct buf *getblk(uint64_t blkno, size_t size, int lk_flags);
 void buf_lock(struct buf *bp, int flags);
 void buf_unlock(struct buf *bp, int flags);
 void bdirty(struct buf * bp);
-void bwrite(struct buf *bp);
+void bawrite(struct buf *bp);
+void bclean(struct buf *bp);
+struct buf **get_dirty_set(size_t *size);
+
+void reset_lock_nums();
+bool check_locks();
+void locks_print();
 
 diskptr_t allocate_blk(size_t size);
 
 void print_buf_stats();
+
 
 #endif

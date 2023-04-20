@@ -34,9 +34,15 @@
 #define BT_MAX_KEYS (1636)
 #define SPLIT_KEYS (818)
 
+#define BT_COW (1)
+#define BT_FRESHCOPY (2)
+
 #define BT_ISLEAF(node) ((node)->n_type == BT_LEAF)
 #define BT_ISINNER(node) ((node)->n_type == BT_INNER)
 #define BT_VALSZ(node) ((node)->n_tree->tr_vs)
+#define BT_ISCOW(node) ((node)->n_hdr.hdr_flags == BT_COW)
+#define BT_FRESH_COW(node) ((node)->n_hdr.hdr_flags = BT_FRESHCOPY)
+#define BT_ALREADY_COW(node) ((node)->n_hdr.hdr_flags == BT_FRESHCOPY)
 
 /* Header object that is apart of every on disk node */
 typedef struct btnodehdr {

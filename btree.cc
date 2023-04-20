@@ -54,12 +54,35 @@ btnode_print(btnode_t node) {
   printf("\n==================\n");
 }
 
+static inline void
+btnode_dirty(btnode_t node) 
+{
+  bdirty(node->n_bp);
+}
+
 static void
-path_print(bpath_t path) {
+path_print(bpath_t path) 
+{
   for (int i = 0; i < path->p_len; i++) {
     btnode_print(&path->p_nodes[i]);
   }
 }
+
+
+static void
+btnode_wrap_bp(btnode_t node, btree_t tree, struct buf *bp)
+{
+  diskptr_t ptr;
+
+  ptr.size = BLKSZ;
+  ptr.offset = bp->bp_lblkno;
+
+  node->n_bp = bp;
+  node->n_data = (btdata_t)bp->bp_data;
+  node->n_tree = tree;
+  node->n_ptr = ptr;
+}
+
 
 static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
@@ -71,7 +94,6 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   node->n_ptr = ptr;
 }
 
-
 /* Node is locked exclusively on create */
 static void 
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
@@ -80,6 +102,66 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   btnode_init(node, tree, ptr, LK_EXCLUSIVE);
   node->n_type = type;
   node->n_len = 0;
+}
+
+/*
+ * TODO: Remove this call by placing idx into the bpath element.
+ */
+static inline int
+btnode_determine_index_in_parent(btnode_t parent, btnode_t node)
+{
+  assert(parent != NULL);
+  uint64_t max_key = node->n_keys[node->n_len - 1];
+  return binary_search(parent->n_keys, parent->n_len, max_key);
+}
+
+/*
+ * Will iterater through the path and perform COW on all entries within the path
+ */
+static void
+path_cow(bpath_t path) 
+{
+  btnode tmp;
+  btnode_t parent = NULL;
+  int idx;
+  /* We hold all the locks of the path exclusively so we can change the parent */
+  for (int i = 0; i < path->p_len; i++) {
+    /* Check if node is not already COWed */
+    tmp = path->p_nodes[i];
+    if (!BT_ALREADY_COW(&tmp)) {
+
+      /* Grab our index in our parent */
+      if (i > 0) {
+        parent = &path->p_nodes[i - 1];
+        idx = btnode_determine_index_in_parent(parent, &tmp);
+      /* We are the root so lets update our own parent ptr as well as save the old tree */
+      } else {
+        /* Init the old tree to be passed back to the user */
+        /* TODO: Update any consumer that this root has changed */
+      }
+      
+      btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
+      /* Perform the copy of data or however we choose to transfer it over */
+      memcpy(path->p_nodes[i].n_data, tmp.n_data, BLKSZ);
+
+      /* Update our parent to know of the change */
+      if (i > 0) {
+        memcpy(&parent->n_ch[idx], &path->p_nodes[i].n_ptr, sizeof(diskptr_t));
+      } else {
+        /* Make sure we update our root ptr in our main tree datastructure */
+        path->p_nodes[i].n_tree->tr_ptr = path->p_nodes[i].n_ptr;
+      }
+
+      buf_unlock(tmp.n_bp, LK_EXCLUSIVE);
+
+      /* We must invalidate the buffer to insure it never writes */
+      bclean(tmp.n_bp);
+
+      /* Turn of cow on the node and dirty the node */
+      BT_FRESH_COW(&path->p_nodes[i]);
+      btnode_dirty(&path->p_nodes[i]);
+    }
+  }
 }
 
 static inline void
@@ -195,6 +277,10 @@ btnode_find_ge(btree_t tree, uint64_t *key, void *value, int acquire_as)
     return -1;
   }
 
+#ifdef DEBUG
+  printf("[Find] %lu in %lu\n", *key, node->n_ptr.offset);
+#endif
+
   *key = node->n_keys[idx];
       // key is greater than all elements in the array
   memcpy(value, &node->n_ch[idx + 1], tree->tr_vs);
@@ -214,14 +300,6 @@ path_parent(bpath_t path)
   return &path->p_nodes[path->p_cur - 1];
 }
 
-static inline int
-btnode_determine_index_in_parent(btnode_t parent, btnode_t node)
-{
-  assert(parent != NULL);
-  uint64_t max_key = node->n_keys[node->n_len - 1];
-  return binary_search(parent->n_keys, parent->n_len, max_key);
-}
-
 static void
 btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
 {
@@ -236,6 +314,8 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
   node->n_keys[idx] = key;
   memcpy(&node->n_ch[idx + 1], &value, sizeof(value));
   node->n_len += 1;
+
+  btnode_dirty(node);
 }
 
 
@@ -292,10 +372,14 @@ btnode_split(bpath_t path)
    */
   btnode_inner_insert(&parent, idx, split_key, right_child.n_ptr);
 
-  /* Unlock the right child */
+  /* Unlock the right child and dirty the children*/
+  btnode_dirty(&right_child);
+  btnode_dirty(node);
+
   buf_unlock(right_child.n_bp, LK_EXCLUSIVE);
 
   if (parent.n_len == BT_MAX_KEYS) {
+    printf("DOUBLE SPLIT\n");
     path_backtrack(path);
     btnode_split(path);
   }
@@ -306,6 +390,7 @@ static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
 {
   assert(BT_ISLEAF(node));
+  assert(!BT_ISCOW(node));
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
       memmove(&node->n_keys[idx+1], &node->n_keys[idx], num_to_move * sizeof(key));
@@ -315,9 +400,15 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
       memmove(&node->n_ch[idx+2], &node->n_ch[idx + 1], num_to_move * BT_MAX_VALUE_SIZE);
   }
 
+#ifdef DEBUG
+  printf("[Insert] %lu at %d in node %lu\n", key, idx, node->n_ptr.offset);
+#endif
+
   node->n_keys[idx] = key;
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   node->n_len += 1;
+
+  bdirty(node->n_bp);
 }
 
 
@@ -329,6 +420,15 @@ btnode_insert(bpath_t path, uint64_t key, void *value)
   btnode_find_child(path, key, LK_EXCLUSIVE);
   btnode_t node = path_getcur(path);
   idx = binary_search(node->n_keys, node->n_len, key);
+
+  /* 
+   * If node is COW'd this means the entire path leading
+   * to this node must be COW'd 
+   * */
+  if (BT_ISCOW(node)) {
+    path_cow(path);
+  }
+
   btnode_leaf_insert(node, idx, key, value);
   if (node->n_len == BT_MAX_KEYS) {
     btnode_split(path);
@@ -410,7 +510,7 @@ btnode_delete(bpath_t path, uint64_t key, void *value)
   }
 
   btnode_leaf_delete(node, idx, value);
-    /* Grab the key so we can search for ourselves after words */
+  btnode_dirty(node);
 
   /* Delete the node from the parent */
   if (node->n_len == 0) {
@@ -418,6 +518,12 @@ btnode_delete(bpath_t path, uint64_t key, void *value)
   }
 
   return 0;
+}
+
+static inline void
+btnode_mark_cow(btnode_t node)
+{
+  node->n_hdr.hdr_flags = BT_COW;
 }
 
 int 
@@ -456,7 +562,6 @@ btree_insert(btree_t tree, uint64_t key, void *value)
   printf("[Insert] %lu\n", key);
 #endif
 
-
   path_add(&path, tree, tree->tr_ptr, LK_EXCLUSIVE);
 
   ret = btnode_insert(&path, key, value);
@@ -485,4 +590,32 @@ btree_find(btree_t tree, uint64_t key, void *value)
   }
 
   return 0;
+}
+
+diskptr_t btree_checkpoint(btree_t tree) 
+{
+  size_t size;
+  struct buf **ds = get_dirty_set(&size);
+  btnode node;
+
+#ifdef DEBUG
+  printf("[Checkpoint]\n");
+#endif
+
+  for (size_t i = 0; i < size; i++) {
+    /* Wrap our node */
+    btnode_wrap_bp(&node, tree, ds[i]);
+
+    /* Node is dead - clean up */
+    if (node.n_len == 0) {
+      bclean(ds[i]);
+    }
+
+    btnode_mark_cow(&node);
+    bawrite(ds[i]);
+  }
+
+  /* TODO: Barrier writes or wait for all buffers to flush */
+  free(ds);
+  return tree->tr_ptr;
 }

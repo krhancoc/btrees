@@ -1,4 +1,5 @@
 #include "buf.h"
+#include "options.h"
 
 #include "pthread.h"
 
@@ -17,12 +18,25 @@ std::set<struct buf *> dirty_set;
 
 std::atomic<uint64_t> pblkno;
 
-#define LRU_CAPACITY (1000)
-#define NS (1e9)
-#define KB (1UL * 1024)
-#define MB (1UL * 1024 * KB)
-#define GB (1UL * 1024 * MB)
-#define THROUGHPUT (2UL * GB)
+static int acquires = 0;
+static int releases = 0;
+
+void
+reset_lock_nums() {
+  acquires = 0;
+  releases = 0;
+}
+
+
+void locks_print()
+{
+  printf("A (%d), R(%d)\n", acquires, releases);
+}
+
+bool
+check_locks() {
+  return acquires == releases;
+}
 
 void sleep_ns(unsigned long ns) {
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -86,11 +100,25 @@ print_buf_stats()
   printf("Percentage: %d\n", percentage);
 }
 
+struct buf **get_dirty_set(size_t *size)
+{
+  *size = dirty_set.size();
+  struct buf **ds = (struct buf **)malloc(sizeof(struct buf *) * dirty_set.size());
+  int i = 0;
+  for (const auto bp : dirty_set) {
+    ds[i] = bp;
+    i += 1;
+  }
+
+  return ds;
+}
+
+
 
 static struct buf *
 create_buf(uint64_t lblkno, size_t size)
 {
-  struct buf *bp = (struct buf *)malloc(sizeof(struct buf));
+  struct buf *bp = new buf{};
   bp->bp_data = malloc(size);
   bzero(bp->bp_data, size);
   bp->bp_data = malloc(size);
@@ -104,7 +132,7 @@ getblk(uint64_t lblkno, size_t size, int lk_flags)
 {
   std::lock_guard<std::mutex> guard(buffer_cache_lk);
   /* Check if we miss on the cache */
-#ifndef NO_DISK_LATENCY
+#ifdef DISK_LATENCY 
   if (lru.access(lblkno)) {
     double sleeptime = ((double)size) / THROUGHPUT;
     sleeptime = sleeptime * NS;
@@ -117,6 +145,7 @@ getblk(uint64_t lblkno, size_t size, int lk_flags)
     struct buf *bp = create_buf(lblkno, size);
     buffer_cache.insert({lblkno, bp});
     buf_lock(bp, lk_flags);
+
     return bp;
   }
 
@@ -128,11 +157,13 @@ void
 buf_lock(struct buf *bp, int flags)
 {
   if (flags == LK_EXCLUSIVE) {
+    acquires += 1;
     bp->bp_lk.lock();
     return;
   }
 
   if (flags == LK_SHARED) {
+    acquires += 1;
     bp->bp_lk.lock_shared();
     return;
   }
@@ -142,10 +173,12 @@ void
 buf_unlock(struct buf *bp, int flags)
 {
   if (flags == LK_EXCLUSIVE) {
+    releases += 1;
     bp->bp_lk.unlock();
   }
   
   if (flags == LK_SHARED) {
+    releases += 1;
     bp->bp_lk.unlock_shared();
   }
 }
@@ -158,12 +191,18 @@ bdirty(struct buf * bp)
 }
 
 void
-bwrite(struct buf *bp)
+bawrite(struct buf *bp)
 {
   std::lock_guard<std::mutex> guard(dirty_lk);
   auto it = dirty_set.find(bp);
   if (it != dirty_set.end())
     dirty_set.erase(it);
+}
+
+void
+bclean(struct buf *bp)
+{
+  bawrite(bp);
 }
 
 
