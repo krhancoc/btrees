@@ -27,6 +27,21 @@ reset_lock_nums() {
   releases = 0;
 }
 
+void
+free_buffer(struct buf *bp) {
+  free(bp->bp_data);
+  delete bp;
+}
+
+void
+reset_buf_cache() {
+  for (auto it: buffer_cache) {
+    free_buffer(it.second);
+  }
+
+  buffer_cache.erase(buffer_cache.begin(), buffer_cache.end());
+  pblkno = 0;
+}
 
 void locks_print()
 {
@@ -114,14 +129,12 @@ struct buf **get_dirty_set(size_t *size)
 }
 
 
-
 static struct buf *
 create_buf(uint64_t lblkno, size_t size)
 {
   struct buf *bp = new buf{};
   bp->bp_data = malloc(size);
   bzero(bp->bp_data, size);
-  bp->bp_data = malloc(size);
   bp->bp_lblkno = lblkno;
 
   return bp;

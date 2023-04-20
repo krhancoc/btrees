@@ -94,10 +94,16 @@ typedef struct btree {
   size_t      tr_vs;
 } btree;
 
+typedef struct kvp {
+  uint64_t key;
+  int error;
+  child_cont data;
+} kvp;
+
 
 int btree_init(btree_t tree, diskptr_t ptr, size_t value_size);
 int btree_insert(btree_t tree, uint64_t key, void *value);
-int btree_bulkinsert(btree_t tree, uint64_t *keys, void **values, size_t len);
+int btree_bulkinsert(btree_t tree, kvp *keyvalues, size_t len);
 
 int btree_delete(btree_t tree, uint64_t key, void *value);
 

@@ -1,4 +1,4 @@
-CXXFLAGS="--std=c++17"
+CXXFLAGS=--std=c++17 -g
 
 objects = main.o btree.o buf.o
 

@@ -14,6 +14,7 @@
 
 
 static double FREQ = 0;
+static std::unordered_map<uint64_t, diskptr_t> keys;
 
 uint64_t generate_unique_key()
 {
@@ -61,10 +62,10 @@ public:
 };
 
 
-int 
-main(int argc, char *argv[])
+void
+general()
 {
-  std::unordered_map<uint64_t, diskptr_t> keys;
+  keys = {};
   diskptr_t value;
   diskptr_t check;
   uint64_t start, stop;
@@ -75,6 +76,7 @@ main(int argc, char *argv[])
   int error;
 
   diskptr_t ptr = allocate_blk(BLKSZ);
+
   printf("Calculating clock speed\n");
   FREQ = get_clock_speed_sleep();
 
@@ -147,6 +149,9 @@ main(int argc, char *argv[])
       btree_init(&oldtree, tree.tr_ptr, sizeof(ptr));
       oldready = true;
     }
+    if ((i % 100000) == 0) {
+      printf("[Inserts Complete] %lu\n", i);
+    }
   }
 
   printf("Done filling. Checking all keys\n");
@@ -204,6 +209,153 @@ main(int argc, char *argv[])
   deletes.print_stat();
   finds.print_stat();
   checkpoints.print_stat();
+}
+
+kvp 
+generate_kvp() {
+  kvp ret;
+
+  uint64_t key = generate_unique_key();
+  while (keys.find(key) != keys.end()) {
+    key = generate_unique_key();
+  }
+  diskptr_t value = generate_diskptr();
+  keys.insert({key, value});
+  ret.key = key;
+  memcpy(&ret.data, &value, sizeof(diskptr_t));
+
+  return ret;
+}
+
+#define BULK_KEYS_NUM (10000)
+
+bool 
+sort_by_key(const kvp &a, const kvp &b) {
+  return a.key < b.key;
+}
+
+int 
+bulkinsert() {
+  keys = {};
+  diskptr_t value;
+  diskptr_t check;
+  uint64_t start, stop;
+
+  btree tree, oldtree;
+  bool oldready = false;
+
+  int error;
+
+  diskptr_t ptr = allocate_blk(BLKSZ);
+  printf("Calculating clock speed\n");
+  FREQ = get_clock_speed_sleep();
+
+  auto inserts = Stat("Inserts");
+  auto bulkinserts = Stat("BulkInserts");
+  auto deletes = Stat("Deletes");
+  auto finds = Stat("Finds");
+  auto checkpoints = Stat("Checkpoints");
+
+  error = btree_init(&tree, ptr, sizeof(ptr));
+  if (error) {
+    printf("Problem initing\n");
+  }
+  std::vector<kvp> kvs;
+
+  kvs.clear();
+  for (int i = 0; i < BULK_KEYS_NUM; i++) {
+    kvs.push_back(generate_kvp());
+  }
+
+  std::sort(kvs.begin(), kvs.end(), sort_by_key);
+
+  printf("Bulk insert...\n");
+  start = rdtscp();
+  btree_bulkinsert(&tree, kvs.data(), kvs.size());
+  stop = rdtscp();
+  bulkinserts.add(stop - start);
+
+  printf("Check key integrity\n");
+  for (auto kv : kvs) {
+    diskptr_t check;
+    start = rdtscp();
+    error = btree_find(&tree, kv.key, &check);
+    stop = rdtscp();
+    finds.add(stop - start);
+    assert(error == 0);
+    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+  }
+
+
+  kvs.clear();
+  for (int i = 0; i < BULK_KEYS_NUM; i++) {
+    kvs.push_back(generate_kvp());
+  }
+
+  printf("Bulk insert...\n");
+  start = rdtscp();
+  btree_bulkinsert(&tree, kvs.data(), kvs.size());
+  stop = rdtscp();
+  bulkinserts.add(stop - start);
+
+
+  printf("Check key integrity\n");
+  for (auto kv : kvs) {
+    printf("%lu\n", kv.key);
+    diskptr_t check;
+    start = rdtscp();
+    error = btree_find(&tree, kv.key, &check);
+    stop = rdtscp();
+    finds.add(stop - start);
+    assert(error == 0);
+    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+  }
+
+  ptr = allocate_blk(BLKSZ);
+  error = btree_init(&tree, ptr, sizeof(ptr));
+  if (error) {
+    printf("Problem initing\n");
+  }
+
+  printf("Regular Insert...\n");
+  for (auto kv : kvs) {
+    diskptr_t check;
+    start = rdtscp();
+    error = btree_insert(&tree, kv.key, &kv.data);
+    stop = rdtscp();
+    inserts.add(stop - start);
+    assert(error == 0);
+  }
+
+  for (auto kv : kvs) {
+    diskptr_t check;
+    start = rdtscp();
+    error = btree_find(&tree, kv.key, &check);
+    stop = rdtscp();
+    finds.add(stop - start);
+    assert(error == 0);
+    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+  }
+
+
+  print_buf_stats();
+  printf("Operation Stats in microseconds\n");
+  inserts.print_stat();
+  bulkinserts.print_stat();
+  deletes.print_stat();
+  finds.print_stat();
+  checkpoints.print_stat();
+
+
+  return 0;
+}
+
+int 
+main(int argc, char *argv[]) {
+  /* general(); */
+  /* reset_buf_cache(); */
+  bulkinsert();
+  reset_buf_cache();
 
   return 0;
 }

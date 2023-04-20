@@ -43,6 +43,7 @@ void bawrite(struct buf *bp);
 void bclean(struct buf *bp);
 struct buf **get_dirty_set(size_t *size);
 
+void reset_buf_cache();
 void reset_lock_nums();
 bool check_locks();
 void locks_print();
