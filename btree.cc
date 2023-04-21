@@ -614,8 +614,10 @@ btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_k
 }
 
 int 
-btree_delete(btree_t tree, uint64_t key, void *value)
+btree_delete(void *treep, uint64_t key, void *value)
 {
+  btree_t tree = (btree_t)treep;
+
   int ret;
   bpath path;
   path.p_len = 0;
@@ -678,8 +680,10 @@ btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
 
 /* Assume keyvalues list is sorted */
 int 
-btree_bulkinsert(btree_t tree, kvp *keyvalues, size_t len)
+btree_bulkinsert(void *treep, kvp *keyvalues, size_t len)
 {
+  btree_t tree = (btree_t)treep;
+
   int ret;
   bpath path;
   path.p_len = 0;
@@ -702,8 +706,10 @@ btree_bulkinsert(btree_t tree, kvp *keyvalues, size_t len)
 }
 
 int
-btree_init(btree_t tree, diskptr_t ptr, size_t value_size)
+btree_init(void *tree_ptr, diskptr_t ptr, size_t value_size)
 {
+  btree_t tree = (btree_t)tree_ptr;
+
   assert(value_size <= BT_MAX_VALUE_SIZE);
 
   tree->tr_ptr = ptr;
@@ -713,8 +719,10 @@ btree_init(btree_t tree, diskptr_t ptr, size_t value_size)
 }
 
 int 
-btree_insert(btree_t tree, uint64_t key, void *value)
+btree_insert(void *treep, uint64_t key, void *value)
 {
+  btree_t tree = (btree_t)treep;
+
   int ret;
   bpath path;
   path.p_len = 0;
@@ -730,10 +738,27 @@ btree_insert(btree_t tree, uint64_t key, void *value)
 
   return (ret);
 }
+int 
+btree_greater_equal(void *treep, uint64_t *key, void *value)
+{
+  btree_t tree = (btree_t)treep;
+  uint64_t possible_key = *key;
+  int error;
+
+  error = btnode_find_ge(tree, &possible_key, value, LK_SHARED);
+  if (error) {
+    return error;
+  }
+
+  *key = possible_key;
+
+  return 0;
+}
 
 int 
-btree_find(btree_t tree, uint64_t key, void *value)
+btree_find(void *treep, uint64_t key, void *value)
 {
+  btree_t tree = (btree_t)treep;
   uint64_t possible_key = key;
   int error;
 #ifdef DEBUG
@@ -753,8 +778,9 @@ btree_find(btree_t tree, uint64_t key, void *value)
 }
 
 diskptr_t 
-btree_checkpoint(btree_t tree) 
+btree_checkpoint(void *treep) 
 {
+  btree_t tree = (btree_t)treep;
   size_t size;
   struct buf **ds = get_dirty_set(&size);
   btnode node;
@@ -777,7 +803,84 @@ btree_checkpoint(btree_t tree)
     bawrite(ds[i]);
   }
 
-  /* TODO: Barrier writes or wait for all buffers to flush */
+  /* TODO: Barrier writes or wait for all buffers to flush on the new root node */
   free(ds);
   return (ptr);
 }
+
+
+/*
+ * Btree rangequery gives all results such that
+ * low_key <= result < key_max
+ */
+int 
+btree_rangequery(void *treep, uint64_t key_low, 
+    uint64_t key_max, kvp *results, size_t results_max)
+{
+  btree_t tree = (btree_t)treep;
+
+  int idx;
+  bpath path;
+  btnode_t node;
+  int cur_res_idx = 0;
+
+  for (;;) {
+
+    /* Start querying */
+    if (cur_res_idx == results_max)
+      return cur_res_idx;
+
+    path.p_len = 0;
+    path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_SHARED);
+
+    node = btnode_find_child(&path, key_low, LK_SHARED);
+
+
+    idx = binary_search(node->n_keys, node->n_len, key_low);
+    /* Did not find the minimum key at all */
+    if (idx == node->n_len) {
+      path_unacquire(&path, LK_SHARED);
+      return cur_res_idx;
+    }
+
+
+    while (idx < node->n_len) {
+      /* Found a key */
+      if (node->n_keys[idx] >= key_max) {
+        path_unacquire(&path, LK_SHARED);
+        return cur_res_idx;
+      }
+
+      if (node->n_keys[idx] >= key_low) {
+        results[cur_res_idx].key = node->n_keys[idx];
+        memcpy(&results[cur_res_idx].data, &node->n_ch[idx + 1], tree->tr_vs);
+        cur_res_idx += 1;
+        /* 
+         * Update our key low to the current key we just added + 1, so we 
+         * can traverse forward 
+         */
+        key_low = node->n_keys[idx] + 1;
+      }
+
+      idx += 1;
+    }
+
+    path_unacquire(&path, LK_SHARED);
+  }
+
+  return 0;
+}
+
+struct vtreeops btreeops = {
+  .vtree_init        = &btree_init,
+
+  .vtree_insert      = &btree_insert,
+  .vtree_bulkinsert  = &btree_bulkinsert,
+  .vtree_delete      = &btree_delete,
+
+  .vtree_find        = &btree_find,
+  .vtree_ge          = &btree_greater_equal,
+  .vtree_rangequery  = &btree_rangequery,
+
+  .vtree_checkpoint  = &btree_checkpoint,
+ };

@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <random>
 #include <cstdint>
-#include <unordered_map>
+#include <map>
 #include <cassert>
 #include <string.h>
 
@@ -14,7 +14,7 @@
 
 
 static double FREQ = 0;
-static std::unordered_map<uint64_t, diskptr_t> keys;
+static std::map<uint64_t, diskptr_t> keys;
 
 uint64_t generate_unique_key()
 {
@@ -252,6 +252,7 @@ bulkinsert() {
 
   auto inserts = Stat("Inserts");
   auto bulkinserts = Stat("BulkInserts");
+  auto rangeq = Stat("RangeQueries");
   auto deletes = Stat("Deletes");
   auto finds = Stat("Finds");
   auto checkpoints = Stat("Checkpoints");
@@ -269,6 +270,7 @@ bulkinsert() {
     }
     std::sort(kvs.begin(), kvs.end(), sort_by_key);
 
+
     printf("Bulk insert...\n");
     start = rdtscp();
     btree_bulkinsert(&tree, kvs.data(), kvs.size());
@@ -284,6 +286,34 @@ bulkinsert() {
       finds.add(stop - start);
       assert(error == 0);
       assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+    }
+
+    printf("Range query check\n");
+    /* Determine which keys are our borders */
+    auto it = keys.begin();
+    std::advance(it, 1000);
+    uint64_t key_low = it->first;
+    std::advance(it, 5000);
+    uint64_t key_max = it->first;
+
+    /* Larger then a Node */
+    kvp queryres[5000];
+    int number_results;
+    start = rdtscp();
+    number_results = btree_rangequery(&tree, key_low, key_max, queryres, 5000);
+    stop = rdtscp();
+    rangeq.add(stop - start);
+    assert(number_results == 5000);
+    
+    /* Now check that we get the same results */
+    int qidx = 0;
+    it = keys.lower_bound(key_low);
+    auto upperit = keys.upper_bound(key_max);
+    while((it != upperit) && (qidx < 5000)) {
+      assert(queryres[qidx].key == it->first);
+      assert(memcmp(&queryres[qidx].data, &it->second, sizeof(diskptr_t)) == 0);
+      it++;
+      qidx += 1;
     }
   }
 
@@ -313,11 +343,11 @@ bulkinsert() {
     assert(memcmp(&check, &key.second, sizeof(diskptr_t)) == 0);
   }
 
-
   print_buf_stats();
   printf("Operation Stats in microseconds\n");
   inserts.print_stat();
   bulkinserts.print_stat();
+  rangeq.print_stat();
   deletes.print_stat();
   finds.print_stat();
   checkpoints.print_stat();

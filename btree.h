@@ -16,9 +16,9 @@
 #include <sys/types.h>
 
 #include "buf.h"
+#include "vtree.h"
 
 #define BLKSZ (64 * 1024)
-#define BT_MAX_VALUE_SIZE (32)
 #define BT_MAX_KEY_SIZE (8)
 #define BT_MAX_HDR_SIZE (64)
 #define BT_MAX_PATH_SIZE (10)
@@ -94,25 +94,19 @@ typedef struct btree {
   size_t      tr_vs;
 } btree;
 
-typedef struct kvp {
-  uint64_t key;
-  int error;
-  child_cont data;
-} kvp;
 
+int btree_init(void *tree, diskptr_t ptr, size_t value_size);
+int btree_insert(void *tree, uint64_t key, void *value);
+int btree_bulkinsert(void *tree, kvp *keyvalues, size_t len);
 
-int btree_init(btree_t tree, diskptr_t ptr, size_t value_size);
-int btree_insert(btree_t tree, uint64_t key, void *value);
-int btree_bulkinsert(btree_t tree, kvp *keyvalues, size_t len);
+int btree_delete(void *tree, uint64_t key, void *value);
 
-int btree_delete(btree_t tree, uint64_t key, void *value);
+int btree_find(void * tree, uint64_t key, void *value);
+int btree_greater_equal(void *tree, uint64_t *key, void *value);
 
-int btree_find(btree_t tree, uint64_t key, void *value);
-int btree_greater_equal(btree_t tree, uint64_t key, void *value);
-int btree_smaller_equal(btree_t tree, uint64_t key, void *value);
+int btree_rangequery(void *tree, uint64_t key_low, 
+    uint64_t key_max, kvp *results, size_t results_max);
 
-int btree_rangequery(btree_t tree, uint64_t key_low, 
-    uint64_t key_max, void *results, size_t results_max);
+ diskptr_t btree_checkpoint(void * tree);
 
- diskptr_t btree_checkpoint(btree_t tree);
-
+extern struct vtreeops btreeops;
