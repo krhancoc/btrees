@@ -5,6 +5,7 @@
 #include <cassert>
 #include <string.h>
 
+#include "vtree.h"
 #include "buf.h"
 #include "btree.h"
 #include "rdtsc.h"
@@ -325,34 +326,6 @@ bulkinsert() {
     printf("Problem initing\n");
   }
 
-  printf("Regular Insert...\n");
-  int idx = 0;
-  for (auto key : keys) {
-    diskptr_t check;
-    start = rdtscp();
-    error = btree_insert(&tree, key.first, &key.second);
-    stop = rdtscp();
-    inserts.add(stop - start);
-    assert(error == 0);
-    if ((idx != 0) && (idx % BULK_KEYS_NUM == 0)) {
-      start = rdtscp();
-      btree_checkpoint(&tree);
-      stop = rdtscp();
-      checkpoints.add(stop - start);
-    }
-    idx += 1;
-  }
-
-  for (auto key : keys) {
-    diskptr_t check;
-    start = rdtscp();
-    error = btree_find(&tree, key.first, &check);
-    stop = rdtscp();
-    finds.add(stop - start);
-    assert(error == 0);
-    assert(memcmp(&check, &key.second, sizeof(diskptr_t)) == 0);
-  }
-
   print_buf_stats();
   printf("Operation Stats in microseconds\n");
   inserts.print_stat();
@@ -362,16 +335,82 @@ bulkinsert() {
   finds.print_stat();
   checkpoints.print_stat();
 
+  return 0;
+}
+
+int
+vtree_test()
+{
+  keys = {};
+  diskptr_t value;
+  diskptr_t check;
+  uint64_t start, stop;
+  btree tree, oldtree;
+  bool oldready = false;
+  int error;
+
+  printf("Calculating clock speed\n");
+  FREQ = get_clock_speed_sleep();
+
+  auto inserts = Stat("Inserts");
+  auto deletes = Stat("Deletes");
+  auto finds = Stat("Finds");
+  auto checkpoints = Stat("Checkpoints");
+
+  keys = {};
+  diskptr_t ptr = allocate_blk(BLKSZ);
+  struct vtree vtree = vtree_create(&tree, 
+      &btreeops, VTREE_WITHWAL);
+
+  VTREE_INIT(&vtree, ptr, sizeof(diskptr_t));
+
+  printf("Filling keys...\n");
+  for (uint64_t i = 0; i < MAX_KEYS; i++) {
+    uint64_t key = generate_unique_key();
+    while (keys.find(key) != keys.end()) {
+      key = generate_unique_key();
+    }
+    diskptr_t value = generate_diskptr();
+
+    keys.insert({key, value});
+    start = rdtscp();
+    error = VTREE_INSERT(&vtree, key, &value);
+    stop = rdtscp();
+    inserts.add(stop - start);
+    assert(error == 0);
+
+    if ((i != 0) && ((i % 10000) == 0)) {
+      start = rdtscp();
+      VTREE_CHECKPOINT(&vtree);
+      stop = rdtscp();
+      checkpoints.add(stop - start);
+    }
+
+    if ((i % 100000) == 0) {
+      printf("[Inserts Complete] %lu\n", i);
+    }
+
+  }
+  inserts.print_stat();
+  deletes.print_stat();
+  finds.print_stat();
+  checkpoints.print_stat();
 
   return 0;
 }
 
 int 
 main(int argc, char *argv[]) {
-  /* general(); */
-  /* reset_buf_cache(); */
+  printf("General Test\n");
+  general();
+  reset_buf_cache();
+
+  printf("Bulkinsert Test\n");
   bulkinsert();
   reset_buf_cache();
 
+  printf("VTree Test\n");
+  vtree_test();
+  reset_buf_cache();
   return 0;
 }

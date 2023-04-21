@@ -1,6 +1,6 @@
 CXXFLAGS=--std=c++17 -g
 
-objects = main.o btree.o buf.o
+objects = main.o btree.o buf.o vtree.o
 
 main: $(objects)
 	c++ $(objects) -o main

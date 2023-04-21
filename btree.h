@@ -1,3 +1,5 @@
+#ifndef _BTREE_H_
+#define _BTREE_H_
 /*
  *
  * COW version, and write optimized 
@@ -110,3 +112,5 @@ int btree_rangequery(void *tree, uint64_t key_low,
  diskptr_t btree_checkpoint(void * tree);
 
 extern struct vtreeops btreeops;
+
+#endif

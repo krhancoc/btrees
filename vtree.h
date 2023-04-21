@@ -31,6 +31,7 @@ typedef int (*vtree_rangequery_t)(void *tree, uint64_t keylow,
     uint64_t keymax, kvp *results, size_t results_max);
 
 typedef diskptr_t (*vtree_checkpoint_t)(void *tree);
+typedef size_t (*vtree_getkeysize)(void *tree);
 
 struct vtreeops {
   vtree_init_t          vtree_init;
@@ -44,12 +45,22 @@ struct vtreeops {
   vtree_rangequery_t    vtree_rangequery;
 
   vtree_checkpoint_t    vtree_checkpoint;
+
+  vtree_getkeysize      vtree_getkeysize;
 };
 
-typedef struct vtree {
+#define VTREE_WALSIZE (64UL * 1024)
+#define VTREE_MAXWAL (VTREE_WALSIZE / sizeof(kvp))
+
+#define VTREE_WITHWAL (1)
+
+struct vtree {
   void            *v_tree;
+  uint32_t        v_flags;
+  kvp             *v_wal;
+  int             v_cur_wal_idx;
   struct vtreeops *v_ops;
-} vtree;
+};
 
 #define VTREE_INIT(tree, ptr, keysize) \
   ((tree)->v_ops->vtree_init((tree)->v_tree, ptr, keysize))
@@ -73,4 +84,20 @@ typedef struct vtree {
   ((tree)->v_ops->vtree_rangequery((tree)->v_tree, \
     keylow, keymax, results, results_max))
 
+#define VTREE_CHECKPOINT(tree) \
+  ((tree)->v_ops->vtree_checkpoint((tree)->v_tree))
+
+#define VTREE_GETKEYSIZE(tree) \
+  ((tree)->v_ops->vtree_getkeysize((tree)->v_tree))
+
+struct vtree vtree_create(void * tree, struct vtreeops *ops, uint32_t v_flags);
+int vtree_insert(vtree *tree, uint64_t key, void *value);
+int vtree_bulkinsert(vtree *tree, kvp *keyvalues, size_t len);
+int vtree_delete(vtree *tree, uint64_t key, void *value);
+int vtree_find(vtree *tree, uint64_t key, void *value);
+int vtree_ge(vtree *tree, uint64_t *key, void *value);
+int vtree_rangequery(vtree *tree, uint64_t key_low, uint64_t key_max,
+    kvp *results, size_t results_max);
+
+diskptr_t vtree_checkpoint(vtree *tree);
 #endif

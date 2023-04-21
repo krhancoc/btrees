@@ -17,7 +17,6 @@ typedef bpath *bpath_t;
 static int num_splits = 0;
 
 #define BINARY_SEARCH_CUTOFF (64)
-
 int binary_search(uint64_t* arr, size_t size, uint64_t key) {
 
   /* In many cases linear search is faster then binary as it 
@@ -875,6 +874,13 @@ btree_rangequery(void *treep, uint64_t key_low,
   return 0;
 }
 
+static size_t 
+btree_getkeysize(void * treep)
+{
+  btree_t tree = (btree_t)treep;
+  return tree->tr_vs;
+}
+
 struct vtreeops btreeops = {
   .vtree_init        = &btree_init,
 
@@ -887,4 +893,5 @@ struct vtreeops btreeops = {
   .vtree_rangequery  = &btree_rangequery,
 
   .vtree_checkpoint  = &btree_checkpoint,
+  .vtree_getkeysize  = &btree_getkeysize
  };
