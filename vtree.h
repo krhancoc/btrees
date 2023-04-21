@@ -1,3 +1,6 @@
+#ifndef _VTREE_H_
+#define _VTREE_H_
+
 #include <sys/types.h>
 
 #include "buf.h"
@@ -70,3 +73,4 @@ typedef struct vtree {
   ((tree)->v_ops->vtree_rangequery((tree)->v_tree, \
     keylow, keymax, results, results_max))
 
+#endif

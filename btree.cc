@@ -652,6 +652,10 @@ btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
 
     /* Function will update len for us and tell us by how much 
      * through the returned inserted variable */
+    if (BT_ISCOW(cur)) {
+      path_cow(path);
+    }
+
     inserted = btnode_leaf_bulkinsert(cur, kvs, len, max_key);
     /* Update our pointer to further along the list */
     *keyvalues = &kvs[inserted];

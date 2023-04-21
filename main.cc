@@ -263,7 +263,7 @@ bulkinsert() {
   }
   std::vector<kvp> kvs;
 
-  for (int idx = 0; idx < 10; idx++) {
+  for (int idx = 0; idx < 100; idx++) {
     kvs.clear();
     for (int i = 0; i < BULK_KEYS_NUM; i++) {
       kvs.push_back(generate_kvp());
@@ -271,13 +271,11 @@ bulkinsert() {
     std::sort(kvs.begin(), kvs.end(), sort_by_key);
 
 
-    printf("Bulk insert...\n");
     start = rdtscp();
     btree_bulkinsert(&tree, kvs.data(), kvs.size());
     stop = rdtscp();
     bulkinserts.add(stop - start);
 
-    printf("Check key integrity\n");
     for (auto kv : kvs) {
       diskptr_t check;
       start = rdtscp();
@@ -288,7 +286,6 @@ bulkinsert() {
       assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
     }
 
-    printf("Range query check\n");
     /* Determine which keys are our borders */
     auto it = keys.begin();
     std::advance(it, 1000);
@@ -315,6 +312,11 @@ bulkinsert() {
       it++;
       qidx += 1;
     }
+
+    start = rdtscp();
+    btree_checkpoint(&tree);
+    stop = rdtscp();
+    checkpoints.add(stop - start);
   }
 
   ptr = allocate_blk(BLKSZ);
@@ -324,6 +326,7 @@ bulkinsert() {
   }
 
   printf("Regular Insert...\n");
+  int idx = 0;
   for (auto key : keys) {
     diskptr_t check;
     start = rdtscp();
@@ -331,6 +334,13 @@ bulkinsert() {
     stop = rdtscp();
     inserts.add(stop - start);
     assert(error == 0);
+    if ((idx != 0) && (idx % BULK_KEYS_NUM == 0)) {
+      start = rdtscp();
+      btree_checkpoint(&tree);
+      stop = rdtscp();
+      checkpoints.add(stop - start);
+    }
+    idx += 1;
   }
 
   for (auto key : keys) {
