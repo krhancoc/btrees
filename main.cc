@@ -262,53 +262,29 @@ bulkinsert() {
   }
   std::vector<kvp> kvs;
 
-  kvs.clear();
-  for (int i = 0; i < BULK_KEYS_NUM; i++) {
-    kvs.push_back(generate_kvp());
-  }
+  for (int idx = 0; idx < 10; idx++) {
+    kvs.clear();
+    for (int i = 0; i < BULK_KEYS_NUM; i++) {
+      kvs.push_back(generate_kvp());
+    }
+    std::sort(kvs.begin(), kvs.end(), sort_by_key);
 
-  std::sort(kvs.begin(), kvs.end(), sort_by_key);
-
-  printf("Bulk insert...\n");
-  start = rdtscp();
-  btree_bulkinsert(&tree, kvs.data(), kvs.size());
-  stop = rdtscp();
-  bulkinserts.add(stop - start);
-
-  printf("Check key integrity\n");
-  for (auto kv : kvs) {
-    diskptr_t check;
+    printf("Bulk insert...\n");
     start = rdtscp();
-    error = btree_find(&tree, kv.key, &check);
+    btree_bulkinsert(&tree, kvs.data(), kvs.size());
     stop = rdtscp();
-    finds.add(stop - start);
-    assert(error == 0);
-    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
-  }
+    bulkinserts.add(stop - start);
 
-
-  kvs.clear();
-  for (int i = 0; i < BULK_KEYS_NUM; i++) {
-    kvs.push_back(generate_kvp());
-  }
-
-  printf("Bulk insert...\n");
-  start = rdtscp();
-  btree_bulkinsert(&tree, kvs.data(), kvs.size());
-  stop = rdtscp();
-  bulkinserts.add(stop - start);
-
-
-  printf("Check key integrity\n");
-  for (auto kv : kvs) {
-    printf("%lu\n", kv.key);
-    diskptr_t check;
-    start = rdtscp();
-    error = btree_find(&tree, kv.key, &check);
-    stop = rdtscp();
-    finds.add(stop - start);
-    assert(error == 0);
-    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+    printf("Check key integrity\n");
+    for (auto kv : kvs) {
+      diskptr_t check;
+      start = rdtscp();
+      error = btree_find(&tree, kv.key, &check);
+      stop = rdtscp();
+      finds.add(stop - start);
+      assert(error == 0);
+      assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+    }
   }
 
   ptr = allocate_blk(BLKSZ);
@@ -318,23 +294,23 @@ bulkinsert() {
   }
 
   printf("Regular Insert...\n");
-  for (auto kv : kvs) {
+  for (auto key : keys) {
     diskptr_t check;
     start = rdtscp();
-    error = btree_insert(&tree, kv.key, &kv.data);
+    error = btree_insert(&tree, key.first, &key.second);
     stop = rdtscp();
     inserts.add(stop - start);
     assert(error == 0);
   }
 
-  for (auto kv : kvs) {
+  for (auto key : keys) {
     diskptr_t check;
     start = rdtscp();
-    error = btree_find(&tree, kv.key, &check);
+    error = btree_find(&tree, key.first, &check);
     stop = rdtscp();
     finds.add(stop - start);
     assert(error == 0);
-    assert(memcmp(&check, &kv.data, sizeof(diskptr_t)) == 0);
+    assert(memcmp(&check, &key.second, sizeof(diskptr_t)) == 0);
   }
 
 

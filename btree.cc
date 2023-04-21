@@ -16,7 +16,23 @@ typedef bpath *bpath_t;
 
 static int num_splits = 0;
 
+#define BINARY_SEARCH_CUTOFF (64)
+
 int binary_search(uint64_t* arr, size_t size, uint64_t key) {
+
+  /* In many cases linear search is faster then binary as it 
+   * can take advantage of streaming prefetching so have a cut
+   * off where we switch to linear search */
+  if (size <= BINARY_SEARCH_CUTOFF) {
+    for (int i = 0; i < size; i++) {
+      if (arr[i] >= key) {
+        return i;
+      }
+    }
+
+    return size;
+  }
+
   size_t low = 0;
   size_t high = size;
   while (low < high) {
@@ -411,6 +427,18 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
   bdirty(node->n_bp);
 }
 
+static void
+btnode_leaf_update(btnode_t node, int idx, void *value)
+{
+  assert(BT_ISLEAF(node));
+  assert(!BT_ISCOW(node));
+  memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
+  bdirty(node->n_bp);
+}
+
+
+
+
 
 static int
 btnode_insert(bpath_t path, uint64_t key, void *value)
@@ -429,9 +457,14 @@ btnode_insert(bpath_t path, uint64_t key, void *value)
     path_cow(path);
   }
 
-  btnode_leaf_insert(node, idx, key, value);
-  if (node->n_len == BT_MAX_KEYS) {
-    btnode_split(path);
+  /* Update over insert */
+  if (node->n_keys[idx] == key) {
+    btnode_leaf_update(node, idx, value);
+  } else {
+    btnode_leaf_insert(node, idx, key, value);
+    if (node->n_len == BT_MAX_KEYS) {
+      btnode_split(path);
+    }
   }
 
 
@@ -527,36 +560,57 @@ btnode_mark_cow(btnode_t node)
 }
 
 static int 
-btnode_bulkinsert(btnode_t node, int idx, kvp *keyvalues, size_t len)
+btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_key)
 {
   assert(BT_ISLEAF(node));
   assert(!BT_ISCOW(node));
-  int num_to_move = node->n_len - idx;
-  int number_inserted = node->n_len + len <= BT_MAX_KEYS ? len : BT_MAX_KEYS - node->n_len;
-  if (num_to_move > 0) {
-      memmove(&node->n_keys[idx + number_inserted], &node->n_keys[idx], num_to_move * sizeof(uint64_t));
+  int keys_i = 0;
+  int node_i = 0;
+  int inserted = 0;
+  for (;;) {
+    if (node->n_len == BT_MAX_KEYS)
+      break;
+    /* No more keys! */
+    if (node_i >= BT_MAX_KEYS)
+      break;
+
+    /* No more keys! */
+    if (*len == 0)
+      break;
+
+    /* Cannot insert more into this node */
+    if (keyvalues[keys_i].key > max_key)
+      break;
+
+    if (keyvalues[keys_i].key == node->n_keys[node_i]) {
+      btnode_leaf_update(node, node_i, &keyvalues[keys_i].data);
+      keys_i += 1;
+      inserted += 1;
+      *len -= 1;
+      continue;
+    }
+
+    if (keyvalues[keys_i].key < node->n_keys[node_i]) {
+      btnode_leaf_insert(node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
+      keys_i += 1;
+      inserted += 1;
+      *len -= 1;
+      continue;
+    }
+
+    /* Last element */
+    if (node_i == node->n_len) {
+      btnode_leaf_insert(node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
+      keys_i += 1;
+      inserted += 1;
+      *len -= 1;
+      continue;
+    }
+
+    node_i += 1;
   }
 
-  if (num_to_move > 0) {
-      memmove(&node->n_ch[idx + number_inserted + 1], &node->n_ch[idx + 1], 
-          num_to_move * BT_MAX_VALUE_SIZE);
-  }
-
-#ifdef DEBUG
-  printf("[Insert] %lu at %d in node %lu\n", key, idx, node->n_ptr.offset);
-#endif
-
-  int i = 0;
-  for (; i < number_inserted; i++) {
-    node->n_keys[idx] = keyvalues[i].key;
-    memcpy(&node->n_ch[idx + 1], &keyvalues[i].data, BT_VALSZ(node));
-    node->n_len += 1;
-    idx += 1;
-  }
-
-  bdirty(node->n_bp);
-
-  return number_inserted;
+  return inserted;
 }
 
 int 
@@ -574,102 +628,72 @@ btree_delete(btree_t tree, uint64_t key, void *value)
   return ret;
 }
 
+#define BULK_DONE     (0)
+#define BULK_SPLIT    (1)
+#define BULK_CONTINUE (2)
+#define BULK_MAX ((uint64_t)(-1))
+
+int
+btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
+{
+  int idx;
+  btnode_t next;
+  kvp *kvs = *keyvalues;
+  int inserted;
+
+  btnode_t cur = path_getcur(path);
+  if (*len == 0)
+    return BULK_DONE;
+
+  /* If we are at a leaf the remaining keys can go here */
+  if (BT_ISLEAF(cur)) {
+
+    /* Function will update len for us and tell us by how much 
+     * through the returned inserted variable */
+    inserted = btnode_leaf_bulkinsert(cur, kvs, len, max_key);
+    /* Update our pointer to further along the list */
+    *keyvalues = &kvs[inserted];
+
+    if (cur->n_len == BT_MAX_KEYS) {
+      btnode_split(path);
+      return BULK_SPLIT;
+    }
+
+
+    return BULK_CONTINUE;
+  } 
+  
+  next = btnode_go_deeper(path, kvs[0].key, LK_EXCLUSIVE); 
+  cur = path_parent(path);
+  /* What is our index */
+  idx = path_getindex(path);
+  /* It is the last child */
+  if (idx != cur->n_len) {
+    /* Change our max key */
+    max_key = path_parent(path)->n_keys[idx];
+  }
+
+  return btnode_bulkinsert(path, keyvalues, len, max_key);
+}
+
 /* Assume keyvalues list is sorted */
 int 
 btree_bulkinsert(btree_t tree, kvp *keyvalues, size_t len)
 {
-  btnode_t cur;
-  btnode_t parent;
-  kvp kv;
-  int start, end;
-
+  int ret;
   bpath path;
   path.p_len = 0;
-
-  int i = 0;
-  int j = 0;
-  for (;;) {
-    /* We are done */
-    if (i == len)
-      break;
-
+  kvp *kvs = keyvalues;
+  
+  path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
+  ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
+  while (ret != BULK_DONE) {
+    /* We got some amount of keys done */
     path_unacquire(&path, LK_EXCLUSIVE);
-
-    /* Start out path off */
+    /* Reset our path */
     path.p_len = 0;
     path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
-
-    /* Find the node for the current key */
-    cur = btnode_find_child(&path, keyvalues[i].key, LK_EXCLUSIVE);
-
-    /* Determine how many of our keys can fit in this node */
-    /* First get starting index */
-    start = binary_search(cur->n_keys, cur->n_len, keyvalues[i].key);
-
-    /* 
-     * Smallest key is larger then all keys in current node
-     * so fill up the node
-     */
-    if (start == cur->n_len) {
-      i += btnode_bulkinsert(cur, start, &keyvalues[i], len - i);
-      if (cur->n_len == BT_MAX_KEYS) {
-        btnode_split(&path);
-      }
-
-      continue;
-    }
-
-    /* 
-     * Fill the node as much as possible until the node is no longer
-     * valid for our current key 
-     */
-    while (cur->n_len < BT_MAX_KEYS) {
-
-      /* No more to add */
-      if (i == len)
-        break;
-
-      /* Is the current element my key? */
-      if (cur->n_keys[start] == keyvalues[i].key) {
-        /* It is so replace it */
-        memcpy(&cur->n_ch[start + 1], &keyvalues[i].data, tree->tr_vs);
-        i += 1;
-        continue;
-      }
-
-      assert(start < cur->n_len);
-
-      /* Its larger then me, so determine if any more keys will fit */
-      j = i;
-      while ((j < len) && (cur->n_keys[start] > keyvalues[j].key)) {
-        j++;
-      }
-
-      /* rest of the elements go in */
-      if (j == len) {
-        btnode_bulkinsert(cur, start, &keyvalues[i], len - i);
-        i = j;
-        break;
-      }
-
-      if (j == i) {
-        break;
-      }
-
-      int inserted;
-      inserted = btnode_bulkinsert(cur, start, &keyvalues[i], j - i);
-      assert(inserted != 0);
-      i += inserted;
-      start += inserted;
-    }
-
-    /* Make sure we filled up the node */
-    if (cur->n_len == BT_MAX_KEYS) {
-      btnode_split(&path);
-      break;
-    }
-
-    start += 1;
+    ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
   }
 
   path_unacquire(&path, LK_EXCLUSIVE);
