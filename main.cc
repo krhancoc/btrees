@@ -351,6 +351,7 @@ vtree_test()
 
   printf("Calculating clock speed\n");
   FREQ = get_clock_speed_sleep();
+  printf("WAL SIZE %lu\n", VTREE_MAXWAL);
 
   auto inserts = Stat("Inserts");
   auto deletes = Stat("Deletes");
@@ -359,13 +360,14 @@ vtree_test()
 
   keys = {};
   diskptr_t ptr = allocate_blk(BLKSZ);
+
   struct vtree vtree = vtree_create(&tree, 
       &btreeops, VTREE_WITHWAL);
 
   VTREE_INIT(&vtree, ptr, sizeof(diskptr_t));
 
   printf("Filling keys...\n");
-  for (uint64_t i = 0; i < MAX_KEYS; i++) {
+  for (uint64_t i = 0; i < 300000; i++) {
     uint64_t key = generate_unique_key();
     while (keys.find(key) != keys.end()) {
       key = generate_unique_key();
@@ -374,14 +376,14 @@ vtree_test()
 
     keys.insert({key, value});
     start = rdtscp();
-    error = VTREE_INSERT(&vtree, key, &value);
+    error = vtree_insert(&vtree, key, &value);
     stop = rdtscp();
     inserts.add(stop - start);
     assert(error == 0);
 
-    if ((i != 0) && ((i % 10000) == 0)) {
+    if ((i != 0) && ((i % 1000) == 0)) {
       start = rdtscp();
-      VTREE_CHECKPOINT(&vtree);
+      vtree_checkpoint(&vtree);
       stop = rdtscp();
       checkpoints.add(stop - start);
     }

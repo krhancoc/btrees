@@ -8,7 +8,7 @@
 
 
 /* Size of LRU */
-#define LRU_CAPACITY (1000)
+#define LRU_CAPACITY (10000)
 
 /* 
  * Throughput of underlying simulated device, used to calculate
@@ -20,7 +20,7 @@
 /*
  * On LRU cache miss induce disk latency
  */
-// #define DISK_LATENCY (1)
+//#define DISK_LATENCY (1)
 
 
 /*

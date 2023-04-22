@@ -39,8 +39,8 @@ binary_search(kvp* arr, size_t size, uint64_t key) {
   }
 }
 
-
-static void empty_wal(vtree *tree)
+void 
+vtree_empty_wal(vtree *tree)
 {
   size_t ks = VTREE_GETKEYSIZE(tree);
   kvp kv;
@@ -48,13 +48,15 @@ static void empty_wal(vtree *tree)
 
   if (tree->v_flags & VTREE_WITHWAL) {
     /* Checkpoint should also clear out the wal hopefully before this point */
-
-    /* for (int i = 0; i < tree->v_cur_wal_idx; i++) { */
-    /*   kv = tree->v_wal[i]; */
-    /*   error = VTREE_INSERT(tree, kv.key, kv.data); */
-    /*   assert (error == 0); */
-    /* } */
-    VTREE_BULKINSERT(tree, tree->v_wal, tree->v_cur_wal_idx);
+    if (tree->v_flags & VTREE_WALBULK) {
+      VTREE_BULKINSERT(tree, tree->v_wal, tree->v_cur_wal_idx);
+    } else {
+      for (int i = 0; i < tree->v_cur_wal_idx; i++) {
+        kv = tree->v_wal[i];
+        error = VTREE_INSERT(tree, kv.key, kv.data);
+        assert (error == 0);
+      }
+    }
 
     tree->v_cur_wal_idx = 0;
   }
@@ -82,6 +84,7 @@ wal_insert(vtree *tree, size_t keysize, uint64_t key, void *data)
   int num_to_move = tree->v_cur_wal_idx - idx;
   if (tree->v_wal[idx].key == key) {
     memcpy(&tree->v_wal[idx].data, data, keysize);
+    return;
   }
 
   if (num_to_move > 0) {
@@ -98,14 +101,10 @@ vtree_insert(vtree *tree, uint64_t key, void *value)
 {
   int error;
   size_t ks = VTREE_GETKEYSIZE(tree);
-  /* 
-   * Not ordering the list right now so im just going to iterate over
-   * list
-   */
   if (tree->v_flags & VTREE_WITHWAL) {
     /* Checkpoint should also clear out the wal hopefully before this point */
     if (tree->v_cur_wal_idx == VTREE_MAXWAL) {
-      empty_wal(tree);
+      vtree_empty_wal(tree);
     }
 
     wal_insert(tree, ks, key, value);
@@ -118,31 +117,36 @@ vtree_insert(vtree *tree, uint64_t key, void *value)
 int 
 vtree_bulkinsert(vtree *tree, kvp *keyvalues, size_t len)
 {
+  return VTREE_BULKINSERT(tree, keyvalues, len);
 }
 
 int 
 vtree_delete(vtree *tree, uint64_t key, void *value) 
 {
+  return VTREE_DELETE(tree, key, value);
 }
 
 int 
 vtree_find(vtree *tree, uint64_t key, void *value) 
 {
+  return VTREE_FIND(tree, key, value);
 }
 
 int vtree_ge(vtree *tree, uint64_t *key, void *value)
 {
+  return VTREE_GE(tree, key, value);
 }
 
 int 
 vtree_rangequery(vtree *tree, uint64_t key_low, uint64_t key_max,
     kvp *results, size_t results_max)
 {
+  return VTREE_RANGEQUERY(tree, key_low, key_max, results, results_max);
 }
 
 diskptr_t
 vtree_checkpoint(vtree *tree)
 {
-  empty_wal(tree);
+  vtree_empty_wal(tree);
   return VTREE_CHECKPOINT(tree);
 }

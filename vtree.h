@@ -52,7 +52,8 @@ struct vtreeops {
 #define VTREE_WALSIZE (64UL * 1024)
 #define VTREE_MAXWAL (VTREE_WALSIZE / sizeof(kvp))
 
-#define VTREE_WITHWAL (1)
+#define VTREE_WITHWAL (0x1)
+#define VTREE_WALBULK (0x2)
 
 struct vtree {
   void            *v_tree;
@@ -100,4 +101,6 @@ int vtree_rangequery(vtree *tree, uint64_t key_low, uint64_t key_max,
     kvp *results, size_t results_max);
 
 diskptr_t vtree_checkpoint(vtree *tree);
+
+void vtree_empty_wal(vtree *tree);
 #endif

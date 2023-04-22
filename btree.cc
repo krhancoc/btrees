@@ -17,7 +17,9 @@ typedef bpath *bpath_t;
 static int num_splits = 0;
 
 #define BINARY_SEARCH_CUTOFF (64)
-int binary_search(uint64_t* arr, size_t size, uint64_t key) {
+
+int 
+binary_search(uint64_t* arr, size_t size, uint64_t key) {
 
   /* In many cases linear search is faster then binary as it 
    * can take advantage of streaming prefetching so have a cut
