@@ -1,27 +1,29 @@
 #include <assert.h>
 
-#include "buf.h"
 #include "btree.h"
+#include "buf.h"
 
 #define INDEX_NULL ((uint16_t)-1)
 
-typedef struct bpath {
-  uint64_t    p_len; 
-  uint16_t    p_indexes[BT_MAX_PATH_SIZE];
-  btnode      p_nodes[BT_MAX_PATH_SIZE];
-  uint8_t     p_cur;
+typedef struct bpath
+{
+  uint64_t p_len;
+  uint16_t p_indexes[BT_MAX_PATH_SIZE];
+  btnode p_nodes[BT_MAX_PATH_SIZE];
+  uint8_t p_cur;
 } bpath;
 
-typedef bpath *bpath_t;
+typedef bpath* bpath_t;
 
 static int num_splits = 0;
 
 #define BINARY_SEARCH_CUTOFF (64)
 
-int 
-binary_search(uint64_t* arr, size_t size, uint64_t key) {
+int
+binary_search(uint64_t* arr, size_t size, uint64_t key)
+{
 
-  /* In many cases linear search is faster then binary as it 
+  /* In many cases linear search is faster then binary as it
    * can take advantage of streaming prefetching so have a cut
    * off where we switch to linear search */
   if (size <= BINARY_SEARCH_CUTOFF) {
@@ -37,24 +39,25 @@ binary_search(uint64_t* arr, size_t size, uint64_t key) {
   size_t low = 0;
   size_t high = size;
   while (low < high) {
-      size_t mid = low + (high - low) / 2;
-      if (arr[mid] >= key) {
-          high = mid;
-      } else {
-          low = mid + 1;
-      }
+    size_t mid = low + (high - low) / 2;
+    if (arr[mid] >= key) {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
   }
   if (low >= size) {
-      return size;
+    return size;
   } else {
-      return low;
+    return low;
   }
 }
 
 static void
-btnode_print(btnode_t node) {
+btnode_print(btnode_t node)
+{
   printf("\nNode %lx %u\n", node->n_ptr.offset, node->n_len);
-  for (int i = 0; i < node->n_len; i+=10) {
+  for (int i = 0; i < node->n_len; i += 10) {
     printf("%d: ", i);
     for (int j = i; j < i + 10 && j < node->n_len; j++) {
       printf(" %lx |", node->n_keys[j]);
@@ -63,10 +66,10 @@ btnode_print(btnode_t node) {
   }
   if (BT_ISINNER(node)) {
     printf("\n====CHILDREN=====\n");
-    for (int i = 0; i < (node->n_len + 1); i+=10) {
+    for (int i = 0; i < (node->n_len + 1); i += 10) {
       printf("%d: ", i);
       for (int j = i; j < i + 10 && (j < (node->n_len + 1)); j++) {
-        printf(" %lx |", ((diskptr_t *)(&node->n_ch[j]))->offset);
+        printf(" %lx |", ((diskptr_t*)(&node->n_ch[j]))->offset);
       }
       printf("\n");
     }
@@ -75,22 +78,21 @@ btnode_print(btnode_t node) {
 }
 
 static inline void
-btnode_dirty(btnode_t node) 
+btnode_dirty(btnode_t node)
 {
   bdirty(node->n_bp);
 }
 
 static void
-path_print(bpath_t path) 
+path_print(bpath_t path)
 {
   for (int i = 0; i < path->p_len; i++) {
     btnode_print(&path->p_nodes[i]);
   }
 }
 
-
 static void
-btnode_wrap_bp(btnode_t node, btree_t tree, struct buf *bp)
+btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 {
   diskptr_t ptr;
 
@@ -103,11 +105,10 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf *bp)
   node->n_ptr = ptr;
 }
 
-
 static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
-  struct buf *bp = getblk(ptr.offset, ptr.size * PBLKSZ, lk_flags);
+  struct buf* bp = getblk(ptr.offset, ptr.size * PBLKSZ, lk_flags);
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->bp_data;
   node->n_tree = tree;
@@ -115,7 +116,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 }
 
 /* Node is locked exclusively on create */
-static void 
+static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
   diskptr_t ptr = allocate_blk(BLKSZ);
@@ -135,12 +136,13 @@ path_getindex(bpath_t path)
  * Will iterater through the path and perform COW on all entries within the path
  */
 static void
-path_cow(bpath_t path) 
+path_cow(bpath_t path)
 {
   btnode tmp;
   btnode_t parent = NULL;
   int idx;
-  /* We hold all the locks of the path exclusively so we can change the parent */
+  /* We hold all the locks of the path exclusively so we can change the parent
+   */
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
@@ -150,12 +152,13 @@ path_cow(bpath_t path)
       if (i > 0) {
         parent = &path->p_nodes[i - 1];
         idx = path->p_indexes[i];
-      /* We are the root so lets update our own parent ptr as well as save the old tree */
+        /* We are the root so lets update our own parent ptr as well as save the
+         * old tree */
       } else {
         /* Init the old tree to be passed back to the user */
         /* TODO: Update any consumer that this root has changed */
       }
-      
+
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
       /* Perform the copy of data or however we choose to transfer it over */
       memcpy(path->p_nodes[i].n_data, tmp.n_data, BLKSZ);
@@ -198,7 +201,7 @@ path_getcur(bpath_t path)
 static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
-  for(int i = 0; i < path->p_len; i++) {
+  for (int i = 0; i < path->p_len; i++) {
     buf_unlock(path->p_nodes[i].n_bp, acquire_as);
   }
 }
@@ -211,12 +214,13 @@ path_backtrack(bpath_t path)
   }
 }
 
-
 static inline btnode_t
 path_fixup_cur_parent(bpath_t path, btnode_t parent)
 {
   int num_to_move = BT_MAX_PATH_SIZE - path->p_cur - 1;
-  memmove(&path->p_nodes[path->p_cur + 1], &path->p_nodes[path->p_cur], num_to_move * sizeof(btnode));
+  memmove(&path->p_nodes[path->p_cur + 1],
+          &path->p_nodes[path->p_cur],
+          num_to_move * sizeof(btnode));
   memcpy(&path->p_nodes[path->p_cur], parent, sizeof(btnode));
   path->p_cur += 1;
   path->p_len += 1;
@@ -249,7 +253,7 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
     }
   }
 
-  diskptr_t ptr = *(diskptr_t *)&cur->n_ch[cidx];
+  diskptr_t ptr = *(diskptr_t*)&cur->n_ch[cidx];
   path_add(path, cur->n_tree, ptr, cidx, acquire_as);
 
   return path_getcur(path);
@@ -258,7 +262,7 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
 /*
  * Finds the node which should hold param KEY.
  */
-static btnode_t 
+static btnode_t
 btnode_find_child(bpath_t path, uint64_t key, int acquire_as)
 {
   btnode_t cur = path_getcur(path);
@@ -269,7 +273,7 @@ btnode_find_child(bpath_t path, uint64_t key, int acquire_as)
   return cur;
 }
 
-/* 
+/*
  * Within a node, find the key thats greater than or equal
  * to value in param KEY.
  * Function will overwrite key with any key that is found
@@ -277,7 +281,7 @@ btnode_find_child(bpath_t path, uint64_t key, int acquire_as)
  * and check after
  */
 static int
-btnode_find_ge(btree_t tree, uint64_t *key, void *value, int acquire_as) 
+btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
 {
   btnode_t node;
   int idx;
@@ -299,7 +303,7 @@ btnode_find_ge(btree_t tree, uint64_t *key, void *value, int acquire_as)
 #endif
 
   *key = node->n_keys[idx];
-      // key is greater than all elements in the array
+  // key is greater than all elements in the array
   memcpy(value, &node->n_ch[idx + 1], tree->tr_vs);
 
   path_unacquire(&path, acquire_as);
@@ -323,10 +327,12 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
   assert(BT_ISINNER(node));
   if (node->n_len) {
     int num_to_move = node->n_len - idx + 1;
-    memmove(&node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
-    memmove(&node->n_ch[idx + 2], &node->n_ch[idx + 1], num_to_move * BT_MAX_VALUE_SIZE);
+    memmove(
+      &node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
+    memmove(&node->n_ch[idx + 2],
+            &node->n_ch[idx + 1],
+            num_to_move * BT_MAX_VALUE_SIZE);
   }
-
 
   node->n_keys[idx] = key;
   memcpy(&node->n_ch[idx + 1], &value, sizeof(value));
@@ -334,7 +340,6 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
 
   btnode_dirty(node);
 }
-
 
 static void
 btnode_split(bpath_t path)
@@ -378,14 +383,20 @@ btnode_split(bpath_t path)
 
   uint64_t split_key = node->n_keys[SPLIT_KEYS - 1];
 
-  memcpy(&right_child.n_keys[0], &node->n_keys[SPLIT_KEYS], SPLIT_KEYS * sizeof(uint64_t));
+  memcpy(&right_child.n_keys[0],
+         &node->n_keys[SPLIT_KEYS],
+         SPLIT_KEYS * sizeof(uint64_t));
   if (BT_ISLEAF(node))
-    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
+    memcpy(&right_child.n_ch[0],
+           &node->n_ch[SPLIT_KEYS],
+           (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
   else
-    memcpy(&right_child.n_ch[0], &node->n_ch[SPLIT_KEYS], (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
+    memcpy(&right_child.n_ch[0],
+           &node->n_ch[SPLIT_KEYS],
+           (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
 
-  /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the right must be
-   * strictly greater
+  /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the
+   * right must be strictly greater
    */
   btnode_inner_insert(&parent, idx, split_key, right_child.n_ptr);
 
@@ -402,19 +413,21 @@ btnode_split(bpath_t path)
   }
 }
 
-
 static void
-btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
+btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 {
   assert(BT_ISLEAF(node));
   assert(!BT_ISCOW(node));
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
-      memmove(&node->n_keys[idx+1], &node->n_keys[idx], num_to_move * sizeof(key));
+    memmove(
+      &node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
   }
 
   if (num_to_move > 0) {
-      memmove(&node->n_ch[idx+2], &node->n_ch[idx + 1], num_to_move * BT_MAX_VALUE_SIZE);
+    memmove(&node->n_ch[idx + 2],
+            &node->n_ch[idx + 1],
+            num_to_move * BT_MAX_VALUE_SIZE);
   }
 
 #ifdef DEBUG
@@ -429,7 +442,7 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void *value)
 }
 
 static void
-btnode_leaf_update(btnode_t node, int idx, void *value)
+btnode_leaf_update(btnode_t node, int idx, void* value)
 {
   assert(BT_ISLEAF(node));
   assert(!BT_ISCOW(node));
@@ -437,12 +450,8 @@ btnode_leaf_update(btnode_t node, int idx, void *value)
   bdirty(node->n_bp);
 }
 
-
-
-
-
 static int
-btnode_insert(bpath_t path, uint64_t key, void *value)
+btnode_insert(bpath_t path, uint64_t key, void* value)
 {
   int idx;
 
@@ -450,9 +459,9 @@ btnode_insert(bpath_t path, uint64_t key, void *value)
   btnode_t node = path_getcur(path);
   idx = binary_search(node->n_keys, node->n_len, key);
 
-  /* 
+  /*
    * If node is COW'd this means the entire path leading
-   * to this node must be COW'd 
+   * to this node must be COW'd
    * */
   if (BT_ISCOW(node)) {
     path_cow(path);
@@ -468,11 +477,10 @@ btnode_insert(bpath_t path, uint64_t key, void *value)
     }
   }
 
-
   return 0;
 }
 static void
-btnode_leaf_delete(btnode_t node, int idx, void *value)
+btnode_leaf_delete(btnode_t node, int idx, void* value)
 {
   assert(BT_ISLEAF(node));
   int num_to_move = node->n_len - idx;
@@ -481,11 +489,15 @@ btnode_leaf_delete(btnode_t node, int idx, void *value)
     memcpy(value, &node->n_ch[idx + 1], BT_VALSZ(node));
 
   if (num_to_move > 0) {
-      memmove(&node->n_keys[idx], &node->n_keys[idx + 1], num_to_move * sizeof(uint64_t));
+    memmove(&node->n_keys[idx],
+            &node->n_keys[idx + 1],
+            num_to_move * sizeof(uint64_t));
   }
 
   if (num_to_move > 0) {
-      memmove(&node->n_ch[idx + 1], &node->n_ch[idx + 2], num_to_move * BT_MAX_VALUE_SIZE);
+    memmove(&node->n_ch[idx + 1],
+            &node->n_ch[idx + 2],
+            num_to_move * BT_MAX_VALUE_SIZE);
   }
   node->n_len -= 1;
 }
@@ -493,7 +505,7 @@ btnode_leaf_delete(btnode_t node, int idx, void *value)
 static void
 btnode_inner_collapse(bpath_t path)
 {
-  diskptr_t *ptr;
+  diskptr_t* ptr;
 
   btnode_t node = path_getcur(path);
   btnode_t parent = path_parent(path);
@@ -514,15 +526,19 @@ btnode_inner_collapse(bpath_t path)
   /* Find our index */
   int idx;
   for (idx = 0; idx < parent->n_len + 1; idx++) {
-    ptr = (diskptr_t *)&parent->n_ch[idx];
+    ptr = (diskptr_t*)&parent->n_ch[idx];
     if (memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0)
       break;
   }
 
   assert(memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0);
   int num_to_move = parent->n_len - idx;
-  memmove(&parent->n_keys[idx], &parent->n_keys[idx + 1], (num_to_move) * sizeof(uint64_t));
-  memmove(&parent->n_ch[idx], &parent->n_ch[idx + 1], num_to_move * BT_MAX_VALUE_SIZE);
+  memmove(&parent->n_keys[idx],
+          &parent->n_keys[idx + 1],
+          (num_to_move) * sizeof(uint64_t));
+  memmove(&parent->n_ch[idx],
+          &parent->n_ch[idx + 1],
+          num_to_move * BT_MAX_VALUE_SIZE);
 
   parent->n_len -= 1;
   if (parent->n_len == 0) {
@@ -532,7 +548,7 @@ btnode_inner_collapse(bpath_t path)
 }
 
 static int
-btnode_delete(bpath_t path, uint64_t key, void *value)
+btnode_delete(bpath_t path, uint64_t key, void* value)
 {
   btnode_t node;
   int idx;
@@ -560,8 +576,11 @@ btnode_mark_cow(btnode_t node)
   node->n_hdr.hdr_flags = BT_COW;
 }
 
-static int 
-btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_key)
+static int
+btnode_leaf_bulkinsert(btnode_t node,
+                       kvp* keyvalues,
+                       size_t* len,
+                       int64_t max_key)
 {
   assert(BT_ISLEAF(node));
   assert(!BT_ISCOW(node));
@@ -592,7 +611,8 @@ btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_k
     }
 
     if (keyvalues[keys_i].key < node->n_keys[node_i]) {
-      btnode_leaf_insert(node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
+      btnode_leaf_insert(
+        node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
       keys_i += 1;
       inserted += 1;
       *len -= 1;
@@ -601,7 +621,8 @@ btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_k
 
     /* Last element */
     if (node_i == node->n_len) {
-      btnode_leaf_insert(node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
+      btnode_leaf_insert(
+        node, node_i, keyvalues[keys_i].key, &keyvalues[keys_i].data);
       keys_i += 1;
       inserted += 1;
       *len -= 1;
@@ -614,8 +635,8 @@ btnode_leaf_bulkinsert(btnode_t node, kvp *keyvalues, size_t *len, int64_t max_k
   return inserted;
 }
 
-int 
-btree_delete(void *treep, uint64_t key, void *value)
+int
+btree_delete(void* treep, uint64_t key, void* value)
 {
   btree_t tree = (btree_t)treep;
 
@@ -631,17 +652,17 @@ btree_delete(void *treep, uint64_t key, void *value)
   return ret;
 }
 
-#define BULK_DONE     (0)
-#define BULK_SPLIT    (1)
+#define BULK_DONE (0)
+#define BULK_SPLIT (1)
 #define BULK_CONTINUE (2)
 #define BULK_MAX ((uint64_t)(-1))
 
 int
-btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
+btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
 {
   int idx;
   btnode_t next;
-  kvp *kvs = *keyvalues;
+  kvp* kvs = *keyvalues;
   int inserted;
 
   btnode_t cur = path_getcur(path);
@@ -651,7 +672,7 @@ btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
   /* If we are at a leaf the remaining keys can go here */
   if (BT_ISLEAF(cur)) {
 
-    /* Function will update len for us and tell us by how much 
+    /* Function will update len for us and tell us by how much
      * through the returned inserted variable */
     if (BT_ISCOW(cur)) {
       path_cow(path);
@@ -666,11 +687,10 @@ btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
       return BULK_SPLIT;
     }
 
-
     return BULK_CONTINUE;
-  } 
-  
-  next = btnode_go_deeper(path, kvs[0].key, LK_EXCLUSIVE); 
+  }
+
+  next = btnode_go_deeper(path, kvs[0].key, LK_EXCLUSIVE);
   cur = path_parent(path);
   /* What is our index */
   idx = path_getindex(path);
@@ -684,16 +704,16 @@ btnode_bulkinsert(bpath_t path, kvp **keyvalues, size_t *len, uint64_t max_key)
 }
 
 /* Assume keyvalues list is sorted */
-int 
-btree_bulkinsert(void *treep, kvp *keyvalues, size_t len)
+int
+btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
 {
   btree_t tree = (btree_t)treep;
 
   int ret;
   bpath path;
   path.p_len = 0;
-  kvp *kvs = keyvalues;
-  
+  kvp* kvs = keyvalues;
+
   path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
   ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
   while (ret != BULK_DONE) {
@@ -711,7 +731,7 @@ btree_bulkinsert(void *treep, kvp *keyvalues, size_t len)
 }
 
 int
-btree_init(void *tree_ptr, diskptr_t ptr, size_t value_size)
+btree_init(void* tree_ptr, diskptr_t ptr, size_t value_size)
 {
   btree_t tree = (btree_t)tree_ptr;
 
@@ -723,8 +743,8 @@ btree_init(void *tree_ptr, diskptr_t ptr, size_t value_size)
   return 0;
 }
 
-int 
-btree_insert(void *treep, uint64_t key, void *value)
+int
+btree_insert(void* treep, uint64_t key, void* value)
 {
   btree_t tree = (btree_t)treep;
 
@@ -743,8 +763,9 @@ btree_insert(void *treep, uint64_t key, void *value)
 
   return (ret);
 }
-int 
-btree_greater_equal(void *treep, uint64_t *key, void *value)
+
+int
+btree_greater_equal(void* treep, uint64_t* key, void* value)
 {
   btree_t tree = (btree_t)treep;
   uint64_t possible_key = *key;
@@ -760,8 +781,8 @@ btree_greater_equal(void *treep, uint64_t *key, void *value)
   return 0;
 }
 
-int 
-btree_find(void *treep, uint64_t key, void *value)
+int
+btree_find(void* treep, uint64_t key, void* value)
 {
   btree_t tree = (btree_t)treep;
   uint64_t possible_key = key;
@@ -782,12 +803,12 @@ btree_find(void *treep, uint64_t key, void *value)
   return 0;
 }
 
-diskptr_t 
-btree_checkpoint(void *treep) 
+diskptr_t
+btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
   size_t size;
-  struct buf **ds = get_dirty_set(&size);
+  struct buf** ds = get_dirty_set(&size);
   btnode node;
   diskptr ptr = tree->tr_ptr;
 
@@ -808,19 +829,22 @@ btree_checkpoint(void *treep)
     bawrite(ds[i]);
   }
 
-  /* TODO: Barrier writes or wait for all buffers to flush on the new root node */
+  /* TODO: Barrier writes or wait for all buffers to flush on the new root node
+   */
   free(ds);
   return (ptr);
 }
-
 
 /*
  * Btree rangequery gives all results such that
  * low_key <= result < key_max
  */
-int 
-btree_rangequery(void *treep, uint64_t key_low, 
-    uint64_t key_max, kvp *results, size_t results_max)
+int
+btree_rangequery(void* treep,
+                 uint64_t key_low,
+                 uint64_t key_max,
+                 kvp* results,
+                 size_t results_max)
 {
   btree_t tree = (btree_t)treep;
 
@@ -840,14 +864,12 @@ btree_rangequery(void *treep, uint64_t key_low,
 
     node = btnode_find_child(&path, key_low, LK_SHARED);
 
-
     idx = binary_search(node->n_keys, node->n_len, key_low);
     /* Did not find the minimum key at all */
     if (idx == node->n_len) {
       path_unacquire(&path, LK_SHARED);
       return cur_res_idx;
     }
-
 
     while (idx < node->n_len) {
       /* Found a key */
@@ -860,9 +882,9 @@ btree_rangequery(void *treep, uint64_t key_low,
         results[cur_res_idx].key = node->n_keys[idx];
         memcpy(&results[cur_res_idx].data, &node->n_ch[idx + 1], tree->tr_vs);
         cur_res_idx += 1;
-        /* 
-         * Update our key low to the current key we just added + 1, so we 
-         * can traverse forward 
+        /*
+         * Update our key low to the current key we just added + 1, so we
+         * can traverse forward
          */
         key_low = node->n_keys[idx] + 1;
       }
@@ -876,24 +898,22 @@ btree_rangequery(void *treep, uint64_t key_low,
   return 0;
 }
 
-static size_t 
-btree_getkeysize(void * treep)
+static size_t
+btree_getkeysize(void* treep)
 {
   btree_t tree = (btree_t)treep;
   return tree->tr_vs;
 }
 
-struct vtreeops btreeops = {
-  .vtree_init        = &btree_init,
+struct vtreeops btreeops = { .vtree_init = &btree_init,
 
-  .vtree_insert      = &btree_insert,
-  .vtree_bulkinsert  = &btree_bulkinsert,
-  .vtree_delete      = &btree_delete,
+                             .vtree_insert = &btree_insert,
+                             .vtree_bulkinsert = &btree_bulkinsert,
+                             .vtree_delete = &btree_delete,
 
-  .vtree_find        = &btree_find,
-  .vtree_ge          = &btree_greater_equal,
-  .vtree_rangequery  = &btree_rangequery,
+                             .vtree_find = &btree_find,
+                             .vtree_ge = &btree_greater_equal,
+                             .vtree_rangequery = &btree_rangequery,
 
-  .vtree_checkpoint  = &btree_checkpoint,
-  .vtree_getkeysize  = &btree_getkeysize
- };
+                             .vtree_checkpoint = &btree_checkpoint,
+                             .vtree_getkeysize = &btree_getkeysize };

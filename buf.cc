@@ -3,18 +3,18 @@
 
 #include "pthread.h"
 
-#include <unordered_map>
-#include <list>
-#include <set>
 #include <cassert>
 #include <chrono>
+#include <list>
+#include <set>
 #include <thread>
+#include <unordered_map>
 
 std::mutex buffer_cache_lk;
-std::unordered_map<uint64_t,struct buf *> buffer_cache;
+std::unordered_map<uint64_t, struct buf*> buffer_cache;
 
 std::mutex dirty_lk;
-std::set<struct buf *> dirty_set;
+std::set<struct buf*> dirty_set;
 
 std::atomic<uint64_t> pblkno;
 
@@ -22,20 +22,23 @@ static int acquires = 0;
 static int releases = 0;
 
 void
-reset_lock_nums() {
+reset_lock_nums()
+{
   acquires = 0;
   releases = 0;
 }
 
 void
-free_buffer(struct buf *bp) {
+free_buffer(struct buf* bp)
+{
   free(bp->bp_data);
   delete bp;
 }
 
 void
-reset_buf_cache() {
-  for (auto it: buffer_cache) {
+reset_buf_cache()
+{
+  for (auto it : buffer_cache) {
     free_buffer(it.second);
   }
 
@@ -43,61 +46,71 @@ reset_buf_cache() {
   pblkno = 0;
 }
 
-void locks_print()
+void
+locks_print()
 {
   printf("A (%d), R(%d)\n", acquires, releases);
 }
 
 bool
-check_locks() {
+check_locks()
+{
   return acquires == releases;
 }
 
-void sleep_ns(unsigned long ns) {
-    auto start_time = std::chrono::high_resolution_clock::now();
-    std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
-    while (std::chrono::duration_cast<std::chrono::nanoseconds>
-        (std::chrono::high_resolution_clock::now() - start_time).count() < ns) {
-    }
+void
+sleep_ns(unsigned long ns)
+{
+  auto start_time = std::chrono::high_resolution_clock::now();
+  std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
+  while (std::chrono::duration_cast<std::chrono::nanoseconds>(
+           std::chrono::high_resolution_clock::now() - start_time)
+           .count() < ns) {
+  }
 }
 
 /*
  * LRUCache
- * 
+ *
  * This cache serves to induce disk latency when required for buffers
  * that are not longer in its hot set. To reduce this time, increase
  * throughput of the simulated SSD (THROUHPUT)
  */
-class LRUCache {
+class LRUCache
+{
 public:
-    LRUCache() : m_capacity(LRU_CAPACITY) {}
-    int access(int key) {
-        auto it = m_cache.find(key);
-        if (it != m_cache.end()) {
-            m_list.splice(m_list.begin(), m_list, it->second);
-            hits.fetch_add(1);
-            return 0;
-        }
-
-        if (m_cache.size() == m_capacity) {
-            int key_to_remove = m_list.back();
-            m_list.pop_back();
-            m_cache.erase(key_to_remove);
-        }
-
-        m_list.emplace_front(key);
-        m_cache[key] = m_list.begin();
-        misses.fetch_add(1);
-        return 1;
+  LRUCache()
+    : m_capacity(LRU_CAPACITY)
+  {
+  }
+  int access(int key)
+  {
+    auto it = m_cache.find(key);
+    if (it != m_cache.end()) {
+      m_list.splice(m_list.begin(), m_list, it->second);
+      hits.fetch_add(1);
+      return 0;
     }
 
-std::atomic<uint64_t> hits;
-std::atomic<uint64_t> misses;
+    if (m_cache.size() == m_capacity) {
+      int key_to_remove = m_list.back();
+      m_list.pop_back();
+      m_cache.erase(key_to_remove);
+    }
+
+    m_list.emplace_front(key);
+    m_cache[key] = m_list.begin();
+    misses.fetch_add(1);
+    return 1;
+  }
+
+  std::atomic<uint64_t> hits;
+  std::atomic<uint64_t> misses;
 
 private:
-    int m_capacity;
-    std::list<uint64_t> m_list;
-    std::unordered_map<int, std::list<uint64_t>::iterator> m_cache;
+  int m_capacity;
+  std::list<uint64_t> m_list;
+  std::unordered_map<int, std::list<uint64_t>::iterator> m_cache;
 };
 
 static LRUCache lru;
@@ -111,14 +124,16 @@ print_buf_stats()
   printf("=========\n");
   printf("Hits: %lu\n", h);
   printf("Misses: %lu\n", m);
-  auto percentage = (int)(((double)h / (double)(h +m)) * 100);
+  auto percentage = (int)(((double)h / (double)(h + m)) * 100);
   printf("Percentage: %d\n", percentage);
 }
 
-struct buf **get_dirty_set(size_t *size)
+struct buf**
+get_dirty_set(size_t* size)
 {
   *size = dirty_set.size();
-  struct buf **ds = (struct buf **)malloc(sizeof(struct buf *) * dirty_set.size());
+  struct buf** ds =
+    (struct buf**)malloc(sizeof(struct buf*) * dirty_set.size());
   int i = 0;
   for (const auto bp : dirty_set) {
     ds[i] = bp;
@@ -128,11 +143,10 @@ struct buf **get_dirty_set(size_t *size)
   return ds;
 }
 
-
-static struct buf *
+static struct buf*
 create_buf(uint64_t lblkno, size_t size)
 {
-  struct buf *bp = new buf{};
+  struct buf* bp = new buf{};
   bp->bp_data = malloc(size);
   bzero(bp->bp_data, size);
   bp->bp_lblkno = lblkno;
@@ -140,12 +154,12 @@ create_buf(uint64_t lblkno, size_t size)
   return bp;
 }
 
-struct buf *
+struct buf*
 getblk(uint64_t lblkno, size_t size, int lk_flags)
 {
   std::lock_guard<std::mutex> guard(buffer_cache_lk);
   /* Check if we miss on the cache */
-#ifdef DISK_LATENCY 
+#ifdef DISK_LATENCY
   if (lru.access(lblkno)) {
     double sleeptime = ((double)size) / THROUGHPUT;
     sleeptime = sleeptime * NS;
@@ -155,8 +169,8 @@ getblk(uint64_t lblkno, size_t size, int lk_flags)
 
   auto iter = buffer_cache.find(lblkno);
   if (iter == buffer_cache.end()) {
-    struct buf *bp = create_buf(lblkno, size);
-    buffer_cache.insert({lblkno, bp});
+    struct buf* bp = create_buf(lblkno, size);
+    buffer_cache.insert({ lblkno, bp });
     buf_lock(bp, lk_flags);
 
     return bp;
@@ -166,8 +180,8 @@ getblk(uint64_t lblkno, size_t size, int lk_flags)
   return iter->second;
 }
 
-void 
-buf_lock(struct buf *bp, int flags)
+void
+buf_lock(struct buf* bp, int flags)
 {
   if (flags == LK_EXCLUSIVE) {
     acquires += 1;
@@ -182,14 +196,14 @@ buf_lock(struct buf *bp, int flags)
   }
 }
 
-void 
-buf_unlock(struct buf *bp, int flags)
+void
+buf_unlock(struct buf* bp, int flags)
 {
   if (flags == LK_EXCLUSIVE) {
     releases += 1;
     bp->bp_lk.unlock();
   }
-  
+
   if (flags == LK_SHARED) {
     releases += 1;
     bp->bp_lk.unlock_shared();
@@ -197,14 +211,14 @@ buf_unlock(struct buf *bp, int flags)
 }
 
 void
-bdirty(struct buf * bp)
+bdirty(struct buf* bp)
 {
   std::lock_guard<std::mutex> guard(dirty_lk);
   dirty_set.insert(bp);
 }
 
 void
-bawrite(struct buf *bp)
+bawrite(struct buf* bp)
 {
   std::lock_guard<std::mutex> guard(dirty_lk);
   auto it = dirty_set.find(bp);
@@ -213,11 +227,10 @@ bawrite(struct buf *bp)
 }
 
 void
-bclean(struct buf *bp)
+bclean(struct buf* bp)
 {
   bawrite(bp);
 }
-
 
 diskptr_t
 allocate_blk(size_t size)

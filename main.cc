@@ -1,35 +1,36 @@
-#include <stdio.h>
-#include <random>
+#include <cassert>
 #include <cstdint>
 #include <map>
-#include <cassert>
+#include <random>
+#include <stdio.h>
 #include <string.h>
 
-#include "vtree.h"
-#include "buf.h"
 #include "btree.h"
+#include "buf.h"
 #include "rdtsc.h"
+#include "vtree.h"
 
 #define MAX_KEYS (1000000)
 #define MAX_CHECK_KEY (10)
 
-
 static double FREQ = 0;
 static std::map<uint64_t, diskptr_t> keys;
 
-uint64_t generate_unique_key()
+uint64_t
+generate_unique_key()
 {
   static std::mt19937_64 rng(std::random_device{}());
   static std::uniform_int_distribution<uint64_t> dist;
 
   uint64_t key;
   do {
-      key = dist(rng);
+    key = dist(rng);
   } while (key == 0);
   return key;
 }
 
-diskptr_t generate_diskptr()
+diskptr_t
+generate_diskptr()
 {
   diskptr_t ptr;
   ptr.size = generate_unique_key();
@@ -38,20 +39,28 @@ diskptr_t generate_diskptr()
   return ptr;
 }
 
-class Stat {
+class Stat
+{
 
 public:
-  Stat(std::string name) : name(name) {}
-
-  void
-  print_stat() {
-    double average = total / num;
-    average = cycles_to_us(average, FREQ);
-    printf("[%s] Average: %f, Total: %f, Num: %f\n", 
-      name.c_str(), average, total, num);
+  Stat(std::string name)
+    : name(name)
+  {
   }
 
-  void add(uint64_t value) {
+  void print_stat()
+  {
+    double average = total / num;
+    average = cycles_to_us(average, FREQ);
+    printf("[%s] Average: %f, Total: %f, Num: %f\n",
+           name.c_str(),
+           average,
+           total,
+           num);
+  }
+
+  void add(uint64_t value)
+  {
     total += value;
     num += 1;
   }
@@ -59,9 +68,7 @@ public:
   std::string name;
   double total = 0;
   double num = 0;
-
 };
-
 
 void
 general()
@@ -99,7 +106,7 @@ general()
     }
     diskptr_t value = generate_diskptr();
 
-    keys.insert({key, value});
+    keys.insert({ key, value });
     start = rdtscp();
     error = btree_insert(&tree, key, &value);
     stop = rdtscp();
@@ -184,7 +191,7 @@ general()
     bzero(&check, sizeof(diskptr_t));
     error = btree_find(&tree, it->first, &check);
     assert(error != 0);
-    keys.erase(it); 
+    keys.erase(it);
 
     int checkkey = 0;
     for (auto t : keys) {
@@ -212,8 +219,9 @@ general()
   checkpoints.print_stat();
 }
 
-kvp 
-generate_kvp() {
+kvp
+generate_kvp()
+{
   kvp ret;
 
   uint64_t key = generate_unique_key();
@@ -221,7 +229,7 @@ generate_kvp() {
     key = generate_unique_key();
   }
   diskptr_t value = generate_diskptr();
-  keys.insert({key, value});
+  keys.insert({ key, value });
   ret.key = key;
   memcpy(&ret.data, &value, sizeof(diskptr_t));
 
@@ -230,13 +238,15 @@ generate_kvp() {
 
 #define BULK_KEYS_NUM (10000)
 
-bool 
-sort_by_key(const kvp &a, const kvp &b) {
+bool
+sort_by_key(const kvp& a, const kvp& b)
+{
   return a.key < b.key;
 }
 
-int 
-bulkinsert() {
+int
+bulkinsert()
+{
   keys = {};
   diskptr_t value;
   diskptr_t check;
@@ -271,7 +281,6 @@ bulkinsert() {
     }
     std::sort(kvs.begin(), kvs.end(), sort_by_key);
 
-
     start = rdtscp();
     btree_bulkinsert(&tree, kvs.data(), kvs.size());
     stop = rdtscp();
@@ -302,12 +311,12 @@ bulkinsert() {
     stop = rdtscp();
     rangeq.add(stop - start);
     assert(number_results == 5000);
-    
+
     /* Now check that we get the same results */
     int qidx = 0;
     it = keys.lower_bound(key_low);
     auto upperit = keys.upper_bound(key_max);
-    while((it != upperit) && (qidx < 5000)) {
+    while ((it != upperit) && (qidx < 5000)) {
       assert(queryres[qidx].key == it->first);
       assert(memcmp(&queryres[qidx].data, &it->second, sizeof(diskptr_t)) == 0);
       it++;
@@ -361,8 +370,7 @@ vtree_test()
   keys = {};
   diskptr_t ptr = allocate_blk(BLKSZ);
 
-  struct vtree vtree = vtree_create(&tree, 
-      &btreeops, VTREE_WITHWAL);
+  struct vtree vtree = vtree_create(&tree, &btreeops, VTREE_WITHWAL);
 
   VTREE_INIT(&vtree, ptr, sizeof(diskptr_t));
 
@@ -374,7 +382,7 @@ vtree_test()
     }
     diskptr_t value = generate_diskptr();
 
-    keys.insert({key, value});
+    keys.insert({ key, value });
     start = rdtscp();
     error = vtree_insert(&vtree, key, &value);
     stop = rdtscp();
@@ -391,7 +399,6 @@ vtree_test()
     if ((i % 100000) == 0) {
       printf("[Inserts Complete] %lu\n", i);
     }
-
   }
   inserts.print_stat();
   deletes.print_stat();
@@ -401,8 +408,9 @@ vtree_test()
   return 0;
 }
 
-int 
-main(int argc, char *argv[]) {
+int
+main(int argc, char* argv[])
+{
   printf("General Test\n");
   general();
   reset_buf_cache();
